@@ -1,0 +1,11 @@
+{
+  "card_id": "Card ID",
+  "student_id": "Student ID",
+  "name": "Name",
+  "phone": "Phone",
+  "attendance": "Attendance Status",
+  "notes": "Note",
+  "timestamp": "Timestamp (e.g. 2024-07-05 14:30:00)",
+  "exam": "Exam 2 (Quiz)",
+  "homework": "Exam 1 (Homework)"
+}
