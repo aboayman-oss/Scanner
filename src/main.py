@@ -1,56 +1,79 @@
+# CustomTkinter migration patch: UI widgets swapped from tkinter while logic stays identical. UX redesign comes later.
 import os
 import sys
 import json
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+import subprocess
+import customtkinter as ctk
+from customtkinter import (
+    CTk,
+    CTkToplevel,
+    CTkFrame,
+    CTkButton,
+    CTkLabel,
+    CTkEntry,
+    CTkCheckBox,
+    CTkRadioButton,
+    CTkProgressBar,
+    CTkComboBox,
+    CTkTabview,
+)
+from tkinter import ttk, filedialog, messagebox, Listbox
 from PIL import Image, ImageTk
 import pandas as pd
 from datetime import datetime
 
-# --- Location Check ---
-expected_folder = "Session scanner"
-base_path = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
-expected_asset = os.path.join(base_path, "assets", "logo.png")
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
-# Only enforce install location for the packaged build; allow scripts to run from anywhere
-if getattr(sys, 'frozen', False):
-    if os.path.basename(base_path) != expected_folder or not os.path.exists(expected_asset):
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "Wrong Location",
-            "Return the app to its original location in the Session scanner folder and create a shortcut instead."
-        )
-        sys.exit(1)
-# ----------------------
+def get_runtime_base():
+    """Return the folder containing the script or executable."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-# Directories & Files
+
+def get_assets_dir():
+    """Locate bundled assets for development and PyInstaller builds.
+
+    PyInstaller one-file executables extract bundled data into a temporary
+    folder exposed via ``sys._MEIPASS``. We read assets from there so the
+    binary stays portable.
+    """
+    if getattr(sys, 'frozen', False):
+        base = getattr(sys, '_MEIPASS', get_runtime_base())
+        return os.path.join(base, 'assets')
+    script_dir = get_runtime_base()
+    local_assets = os.path.join(script_dir, 'assets')
+    if os.path.exists(os.path.join(local_assets, 'logo.png')):
+        return local_assets
+    parent_dir = os.path.dirname(script_dir)
+    parent_assets = os.path.join(parent_dir, 'assets')
+    if os.path.exists(os.path.join(parent_assets, 'logo.png')):
+        return parent_assets
+    return local_assets
+
+
+RUNTIME_BASE = get_runtime_base()
+# Assets live beside the script during development and inside the temporary
+# PyInstaller bundle when frozen, so we centralize their path resolution above.
+ASSETS_DIR = get_assets_dir()
+
 if getattr(sys, 'frozen', False):
-    # Running as compiled exe
-    BASE_FOLDER = os.path.dirname(sys.executable)
+    # Keep user-generated data next to the executable for portability.
+    BASE_FOLDER = RUNTIME_BASE
 else:
-    # Running as script; fall back to parent directory if assets sit there
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidate_base = script_dir
-    assets_path = os.path.join(candidate_base, "assets", "logo.png")
-    if not os.path.exists(assets_path):
-        parent_dir = os.path.dirname(script_dir)
-        parent_asset = os.path.join(parent_dir, "assets", "logo.png")
-        if os.path.exists(parent_asset):
-            candidate_base = parent_dir
-    BASE_FOLDER = candidate_base
+    BASE_FOLDER = os.path.dirname(ASSETS_DIR)
 
-ASSETS_DIR       = os.path.join(BASE_FOLDER, "assets")
-LOGO_FILE        = os.path.join(ASSETS_DIR, "logo.png")
-HOME_BG_FILE     = os.path.join(ASSETS_DIR, "background.jpg")
-SETTINGS_BG_FILE = os.path.join(ASSETS_DIR, "backgroundnew.jpg")
+LOGO_FILE        = os.path.join(ASSETS_DIR, 'logo.png')
+HOME_BG_FILE     = os.path.join(ASSETS_DIR, 'background.jpg')
+SETTINGS_BG_FILE = os.path.join(ASSETS_DIR, 'backgroundnew.jpg')
 
-DATA_FOLDER      = os.path.join(BASE_FOLDER, "Data")
-SESSIONS_FOLDER  = os.path.join(BASE_FOLDER, "Sessions")
-ARCHIVE_FOLDER   = os.path.join(BASE_FOLDER, "Data archive")
-MAPPING_FILE     = os.path.join(ARCHIVE_FOLDER, "column_map.json")
-SETTINGS_FILE    = os.path.join(ARCHIVE_FOLDER, "app_settings.json")
-LAST_DATA_FILE   = os.path.join(ARCHIVE_FOLDER, "last_data.json")
+DATA_FOLDER      = os.path.join(BASE_FOLDER, 'Data')
+SESSIONS_FOLDER  = os.path.join(BASE_FOLDER, 'Sessions')
+ARCHIVE_FOLDER   = os.path.join(BASE_FOLDER, 'Data archive')
+MAPPING_FILE     = os.path.join(ARCHIVE_FOLDER, 'column_map.json')
+SETTINGS_FILE    = os.path.join(ARCHIVE_FOLDER, 'app_settings.json')
+LAST_DATA_FILE   = os.path.join(ARCHIVE_FOLDER, 'last_data.json')
 
 for folder in (DATA_FOLDER, SESSIONS_FOLDER, ARCHIVE_FOLDER):
     os.makedirs(folder, exist_ok=True)
@@ -65,257 +88,471 @@ SETTINGS = {
     "file_type": "xlsx"
 }
 
-class ColumnMappingDialog(tk.Toplevel):
-    def __init__(self, parent, df_columns, current_mapping=None):
-        super().__init__(parent)
-        self.title("Configure Column Template")
-        self.geometry("360x380")
-        self.df_columns      = df_columns
-        self.current_mapping = current_mapping or {}
-        self.widgets         = {}
-        self.mapping         = {}
-        self.build_ui()
-        self.transient(parent)
-        self.grab_set()
-        parent.wait_window(self)
 
-    def build_ui(self):
-        ttk.Label(self, text="Map each field to an excel column").pack(pady=10)
-        def add_row(label, key):
-            frm = ttk.Frame(self); frm.pack(fill="x", padx=20, pady=4)
-            ttk.Label(frm, text=f"{label}:", width=12).pack(side="left")
-            cb = ttk.Combobox(frm, values=self.df_columns, state="readonly")
-            cb.pack(fill="x", expand=True)
-            if key in self.current_mapping:
-                cb.set(self.current_mapping[key])
-            self.widgets[key] = cb
+class SettingsWindow(CTkToplevel):
+    mapping_placeholder = "-- Select --"
 
-        for lbl, key in [
-            ("Card ID","card_id"), ("Student ID","student_id"),
-            ("Name","name"), ("Phone no.","phone"),
-            ("Attendance","attendance"), ("Notes","notes"),
-            ("Timestamp","timestamp"),
-            ("Exam","exam"), ("Homework","homework")
-        ]:
-            add_row(lbl, key)
-
-        ttk.Button(self, text="Confirm", command=self.on_confirm).pack(pady=15)
-
-    def on_confirm(self):
-        self.mapping = {k: w.get() for k, w in self.widgets.items()}
-        vals = list(self.mapping.values())
-        if "" in vals or len(set(vals)) < len(vals):
-            messagebox.showerror("Mapping Error", "All fields must be uniquely assigned.")
-            return
-        self.destroy()
-
-class SettingsWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("600x400")
+        self.geometry("680x520")
+        self.minsize(640, 480)
 
         self.original_bg = Image.open(SETTINGS_BG_FILE)
-        self.bg_photo    = ImageTk.PhotoImage(self.original_bg)
-        self.bg_label    = tk.Label(self, image=self.bg_photo)
+        self.bg_photo = ImageTk.PhotoImage(self.original_bg)
+        self.bg_label = CTkLabel(self, text="", image=self.bg_photo)
         self.bg_label.place(relwidth=1, relheight=1)
         self.bind("<Configure>", self._on_resize)
 
-        self.parent_app     = parent
-        self.column_map     = parent.column_map or {}
-        self._main_btns     = []
-        self.params_widgets = []
-        self.build_main_buttons()
+        self.parent_app = parent
+        self.column_map = dict(parent.column_map or {})
+        self.working_mapping = dict(self.column_map)
+        self.mapping_fields = [
+            ("Card ID", "card_id"),
+            ("Student ID", "student_id"),
+            ("Name", "name"),
+            ("Phone no.", "phone"),
+            ("Attendance", "attendance"),
+            ("Notes", "notes"),
+            ("Timestamp", "timestamp"),
+            ("Exam", "exam"),
+            ("Homework", "homework"),
+        ]
+        self.mapping_controls = {}
+        self.mapping_source_path = None
+        self.mapping_columns = []
+        for value in self.working_mapping.values():
+            if value and value not in self.mapping_columns:
+                self.mapping_columns.append(value)
 
-    def _on_resize(self, e):
-        if e.widget is self:
-            w, h = e.width, e.height
-            resized    = self.original_bg.resize((w, h), Image.LANCZOS)
+        self.stage_options = list(SETTINGS["stage_options"])
+        self.center_options = list(SETTINGS["center_options"])
+        self.var_exam = ctk.BooleanVar(value=SETTINGS["restrictions"].get("exam", False))
+        self.var_homework = ctk.BooleanVar(value=SETTINGS["restrictions"].get("homework", False))
+        self.var_file_type = ctk.StringVar(value=SETTINGS.get("file_type", "xlsx"))
+
+        self.template_status_var = ctk.StringVar()
+
+        container = CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=24, pady=(24, 72))
+
+        self.tabview = CTkTabview(container)
+        self.tabview.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.template_tab = self.tabview.add("Template Mapping")
+        self.stage_tab = self.tabview.add("Stage & Center")
+        self.restrictions_tab = self.tabview.add("Restrictions")
+        self.filetype_tab = self.tabview.add("File Type")
+
+        self._build_template_tab()
+        self._build_stage_tab()
+        self._build_restrictions_tab()
+        self._build_filetype_tab()
+
+        btn_frame = CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", padx=24, pady=20)
+        btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
+
+        self.cancel_button = CTkButton(btn_frame, text="Cancel", command=self._cancel)
+        self.cancel_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        self.apply_button = CTkButton(btn_frame, text="Apply", command=self._apply_settings, state="disabled")
+        self.apply_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        if self.working_mapping:
+            self.template_status_var.set("Using saved mapping. Load a sample file to update it.")
+        else:
+            self.template_status_var.set("Load a sample file to map template fields.")
+        self._populate_template_controls()
+        self._update_apply_state()
+
+    def _on_resize(self, event):
+        if event.widget is self:
+            resized = self.original_bg.resize((event.width, event.height), Image.LANCZOS)
             self.bg_photo = ImageTk.PhotoImage(resized)
-            self.bg_label.config(image=self.bg_photo)
+            self.bg_label.configure(image=self.bg_photo)
 
-    def build_main_buttons(self):
-        for w in self.params_widgets: w.destroy()
-        for b in self._main_btns:     b.destroy()
-        self.params_widgets.clear()
-        self._main_btns.clear()
+    def _build_template_tab(self):
+        CTkLabel(
+            self.template_tab,
+            text="Assign each template field to a column from a sample data file.",
+            justify="left"
+        ).pack(anchor="w", pady=(12, 8))
+        option_row = CTkFrame(self.template_tab, fg_color="transparent")
+        option_row.pack(fill="x", pady=(0, 12))
+        CTkButton(option_row, text="Load Source File", width=140, command=self._prompt_for_columns).pack(side="left")
+        CTkLabel(option_row, textvariable=self.template_status_var, justify="left", wraplength=360).pack(side="left", padx=12)
 
-        b1 = ttk.Button(self, text="Configure Template", command=self.on_click_configure)
-        b2 = ttk.Button(self, text="Session Parameters", command=self.on_click_params)
-        b3 = ttk.Button(self, text="Restrictions",       command=self.on_click_restrictions)
-        b4 = ttk.Button(self, text="File Type", command=self.on_click_filetype)
-        for i, btn in enumerate((b1, b2, b3, b4)):
-            btn.place(relx=0.5, rely=0.35 + i*0.2, anchor="center", width=220)
-            self._main_btns.append(btn)
+        form = CTkFrame(self.template_tab, fg_color="transparent")
+        form.pack(fill="x", padx=4, pady=(4, 0))
+        form.grid_columnconfigure(1, weight=1)
+        self.template_form = form
 
+        for idx, (label_text, field_key) in enumerate(self.mapping_fields):
+            CTkLabel(form, text=f"{label_text}:").grid(row=idx, column=0, sticky="w", padx=(0, 12), pady=4)
+            combo = CTkComboBox(form, state="readonly", values=[self.mapping_placeholder])
+            combo.grid(row=idx, column=1, sticky="ew", pady=4)
+            combo.set(self.mapping_placeholder)
+            combo.configure(command=lambda value, key=field_key: self._on_mapping_change(key, value))
+            self.mapping_controls[field_key] = combo
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+    def _populate_template_controls(self):
+        available = []
+        for col in self.mapping_columns:
+            col = str(col).strip()
+            if col and col not in available:
+                available.append(col)
+        values = [self.mapping_placeholder] + available if available else [self.mapping_placeholder]
 
-    def _on_close(self):
-        self.destroy()
+        for field_key, combo in self.mapping_controls.items():
+            combo.configure(values=values)
+            current = self.working_mapping.get(field_key, "")
+            if current and current in available:
+                combo.set(current)
+            else:
+                combo.set(self.mapping_placeholder)
+                self.working_mapping[field_key] = ""
 
-    def on_click_configure(self):
-        file_type = SETTINGS.get("file_type", "csv")
+    def _on_mapping_change(self, field_key, value):
+        cleaned = "" if value in ("", self.mapping_placeholder) else value.strip()
+        self.working_mapping[field_key] = cleaned
+        self._update_apply_state()
+
+    def _prompt_for_columns(self):
+        file_type = self.var_file_type.get().lower()
         ext = "*.xlsx" if file_type == "xlsx" else "*.csv"
         path = filedialog.askopenfilename(
+            parent=self,
             title=f"Select {file_type.upper()}",
             filetypes=[(f"{file_type.upper()} files", ext)]
         )
-        if not path: return
+        if not path:
+            return
         try:
             df = read_data(path, nrows=0)
-        except Exception as e:
-            messagebox.showerror("Error", str(e)); return
+        except Exception as exc:
+            messagebox.showerror("Load Failed", str(exc), parent=self)
+            return
+        columns = [str(col).strip() for col in df.columns]
+        self.mapping_columns = [col for col in columns if col]
+        self.mapping_source_path = path
+        self.template_status_var.set(f"Columns loaded from {os.path.basename(path)}.")
+        self._populate_template_controls()
+        self._update_apply_state()
 
-        dlg = ColumnMappingDialog(self, list(df.columns), self.column_map)
-        if getattr(dlg, "mapping", None):
-            self.parent_app.column_map = dlg.mapping
-            with open(MAPPING_FILE, "w") as f:
-                json.dump(dlg.mapping, f, indent=2)
-            messagebox.showinfo("Saved", "Template mapping updated.")
-            self.focus_force()  # <-- Add this line to refocus settings window
+    def _collect_mapping(self):
+        mapping = {}
+        for _, field_key in self.mapping_fields:
+            value = self.mapping_controls[field_key].get().strip()
+            if value == self.mapping_placeholder:
+                value = ""
+            mapping[field_key] = value
+        return mapping
 
-    def on_click_params(self):
-        for b in self._main_btns: b.place_forget()
-        self.show_params_frame()
-
-    def show_params_frame(self):
-        lbl_s = ttk.Label(self, text="Stage Options:"); lbl_s.place(relx=0.1, rely=0.1)
-        lb_s  = tk.Listbox(self, height=6); lb_s.place(relx=0.1, rely=0.15, relwidth=0.35)
-        for item in SETTINGS["stage_options"]: lb_s.insert("end", item)
-        ent_s = ttk.Entry(self); ent_s.place(relx=0.1, rely=0.45, relwidth=0.25)
-        btn_add_s = ttk.Button(self, text="Add", command=lambda: add_stage())
-        btn_rem_s = ttk.Button(self, text="Remove", command=lambda: rem_stage())
-        btn_add_s.place(relx=0.38, rely=0.45, width=50)
-        btn_rem_s.place(relx=0.38, rely=0.50, width=50)
-
-        lbl_c = ttk.Label(self, text="Center Options:"); lbl_c.place(relx=0.55, rely=0.1)
-        lb_c  = tk.Listbox(self, height=6); lb_c.place(relx=0.55, rely=0.15, relwidth=0.35)
-        for item in SETTINGS["center_options"]: lb_c.insert("end", item)
-        ent_c = ttk.Entry(self); ent_c.place(relx=0.55, rely=0.45, relwidth=0.25)
-        btn_add_c = ttk.Button(self, text="Add", command=lambda: add_center())
-        btn_rem_c = ttk.Button(self, text="Remove", command=lambda: rem_center())
-        btn_add_c.place(relx=0.83, rely=0.45, width=50)
-        btn_rem_c.place(relx=0.83, rely=0.50, width=50)
-
-        btn_save   = ttk.Button(self, text="Save",   command=self.save_params)
-        btn_cancel = ttk.Button(self, text="Cancel", command=self.cancel_params)
-        btn_save.place(relx=0.35, rely=0.85, width=80)
-        btn_cancel.place(relx=0.55, rely=0.85, width=80)
-
-        self.params_widgets = [
-            lbl_s, lb_s, ent_s, btn_add_s, btn_rem_s,
-            lbl_c, lb_c, ent_c, btn_add_c, btn_rem_c,
-            btn_save, btn_cancel
-        ]
-        self.lb_stage, self.lb_center   = lb_s, lb_c
-        self.ent_stage, self.ent_center = ent_s, ent_c
-
-        def add_stage():
-            v = ent_s.get().strip()
-            if v and v not in lb_s.get(0, "end"): lb_s.insert("end", v)
-            ent_s.delete(0, "end")
-        def rem_stage():
-            sel = lb_s.curselection()
-            if sel: lb_s.delete(sel)
-        def add_center():
-            v = ent_c.get().strip()
-            if v and v not in lb_c.get(0, "end"): lb_c.insert("end", v)
-            ent_c.delete(0, "end")
-        def rem_center():
-            sel = lb_c.curselection()
-            if sel: lb_c.delete(sel)
-
-    def save_params(self):
-        SETTINGS["stage_options"]  = list(self.lb_stage.get(0, "end"))
-        SETTINGS["center_options"] = list(self.lb_center.get(0, "end"))
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump({
-                "stage_options":  SETTINGS["stage_options"],
-                "center_options": SETTINGS["center_options"],
-                "restrictions":   SETTINGS["restrictions"]
-            }, f, indent=2)
-        for w in self.params_widgets: w.destroy()
-        self.build_main_buttons()
-
-    def cancel_params(self):
-        for w in self.params_widgets: w.destroy()
-        self.build_main_buttons()
-
-    def on_click_restrictions(self):
-        dlg = tk.Toplevel(self); dlg.title("Restrictions"); dlg.geometry("300x180")
-        var_exam    = tk.BooleanVar(value=SETTINGS["restrictions"]["exam"])
-        var_homewrk = tk.BooleanVar(value=SETTINGS["restrictions"]["homework"])
-        ttk.Checkbutton(dlg, text="Enable Exam Column",    variable=var_exam).pack(pady=8)
-        ttk.Checkbutton(dlg, text="Enable Homework Column",variable=var_homewrk).pack(pady=8)
-        frm = ttk.Frame(dlg); frm.pack(pady=10)
-        ttk.Button(frm, text="Save",   command=lambda s=True: apply(s)).pack(side="left", padx=10)
-        ttk.Button(frm, text="Cancel", command=lambda s=False: apply(s)).pack(side="left", padx=10)
-        def apply(save):
-            if save:
-                SETTINGS["restrictions"]["exam"]     = var_exam.get()
-                SETTINGS["restrictions"]["homework"] = var_homewrk.get()
-                with open(SETTINGS_FILE, "w") as f:
-                    json.dump({
-                        "stage_options":  SETTINGS["stage_options"],
-                        "center_options": SETTINGS["center_options"],
-                        "restrictions":   SETTINGS["restrictions"]
-                    }, f, indent=2)
-            dlg.destroy()
-    def on_click_filetype(self):
-        dlg = tk.Toplevel(self)
-        dlg.title("File Type")
-        dlg.geometry("300x180")
-        var_filetype = tk.StringVar(value=SETTINGS.get("file_type", "csv"))
-        ttk.Label(dlg, text="Choose data file type:").pack(pady=10)
-        rb_csv = ttk.Radiobutton(dlg, text="CSV", variable=var_filetype, value="csv")
-        rb_xlsx = ttk.Radiobutton(dlg, text="XLSX", variable=var_filetype, value="xlsx")
-        rb_csv.pack(pady=5)
-        rb_xlsx.pack(pady=5)
-        frm = ttk.Frame(dlg); frm.pack(pady=10)
-        ttk.Button(frm, text="Save", command=lambda: apply(True)).pack(side="left", padx=10)
-        ttk.Button(frm, text="Cancel", command=lambda: apply(False)).pack(side="left", padx=10)
-        def apply(save):
-            if save:
-                SETTINGS["file_type"] = var_filetype.get()
-                with open(SETTINGS_FILE, "w") as f:
-                    json.dump(SETTINGS, f, indent=2)
-            dlg.destroy()
-
-class SessionDialog(simpledialog.Dialog):
-    def __init__(self, parent, stages, centers):
-        self.stages  = stages
-        self.centers = centers
-        self.result  = None
-        super().__init__(parent, title="Session Parameters")
-
-    def body(self, master):
-        ttk.Label(master, text="Stage:").grid(row=0, column=0, sticky="e")
-        self.stage_cb   = ttk.Combobox(master, values=self.stages, state="readonly")
-        self.stage_cb.grid(row=0, column=1, pady=5, padx=5)
-        ttk.Label(master, text="Center:").grid(row=1, column=0, sticky="e")
-        self.center_cb  = ttk.Combobox(master, values=self.centers, state="readonly")
-        self.center_cb.grid(row=1, column=1, pady=5, padx=5)
-        ttk.Label(master, text="Session No.:").grid(row=2, column=0, sticky="e")
-        self.session_ent = ttk.Entry(master, width=4)
-        self.session_ent.grid(row=2, column=1, pady=5, padx=5)
-        return self.stage_cb
-
-    def validate(self):
-        if (not self.stage_cb.get() or
-            not self.center_cb.get() or
-            not self.session_ent.get().isdigit()):
-            messagebox.showerror("Input Error",
-                                 "Select stage, center and numeric session no.")
+    def _is_mapping_valid(self):
+        mapping = self._collect_mapping()
+        values = list(mapping.values())
+        if not values or "" in values:
             return False
-        return True
+        return len(values) == len(set(values))
 
-    def apply(self):
-        stage  = self.stage_cb.get()
-        center = self.center_cb.get()
-        sn     = int(self.session_ent.get())
-        name   = f"{stage} {center} session {sn}"
-        self.result = (name, {"stage": stage, "center": center, "no": sn})
+    def _update_apply_state(self):
+        state = "normal" if self._is_mapping_valid() else "disabled"
+        self.apply_button.configure(state=state)
+
+    def _build_stage_tab(self):
+        mode = ctk.get_appearance_mode()
+        if mode == "Dark":
+            list_bg, list_fg = "#1f1f1f", "#f2f2f2"
+        else:
+            list_bg, list_fg = "#ffffff", "#1a1a1a"
+        select_bg, select_fg = "#1f6aa5", "#ffffff"
+
+        CTkLabel(
+            self.stage_tab,
+            text="Manage the stage and center choices available when starting a session."
+        ).pack(anchor="w", pady=(12, 8))
+
+        lists_frame = CTkFrame(self.stage_tab, fg_color="transparent")
+        lists_frame.pack(fill="both", expand=True)
+        lists_frame.grid_columnconfigure(0, weight=1)
+        lists_frame.grid_columnconfigure(1, weight=1)
+        lists_frame.grid_rowconfigure(1, weight=1)
+
+        stage_frame = CTkFrame(lists_frame, fg_color="transparent")
+        stage_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        CTkLabel(stage_frame, text="Stage Options").pack(anchor="w")
+        self.stage_listbox = Listbox(
+            stage_frame,
+            height=8,
+            bg=list_bg,
+            fg=list_fg,
+            selectbackground=select_bg,
+            selectforeground=select_fg,
+            highlightthickness=0,
+            relief="flat"
+        )
+        self.stage_listbox.pack(fill="both", expand=True, pady=(6, 8))
+        for item in self.stage_options:
+            self.stage_listbox.insert("end", item)
+        stage_entry_row = CTkFrame(stage_frame, fg_color="transparent")
+        stage_entry_row.pack(fill="x", pady=(0, 6))
+        stage_entry_row.grid_columnconfigure(0, weight=1)
+        self.stage_entry = CTkEntry(stage_entry_row, placeholder_text="Add stage")
+        self.stage_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        CTkButton(stage_entry_row, text="Add", width=70, command=self._add_stage).grid(row=0, column=1, sticky="e")
+        CTkButton(stage_frame, text="Remove Selected", command=self._remove_stage).pack(anchor="e")
+
+        center_frame = CTkFrame(lists_frame, fg_color="transparent")
+        center_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        CTkLabel(center_frame, text="Center Options").pack(anchor="w")
+        self.center_listbox = Listbox(
+            center_frame,
+            height=8,
+            bg=list_bg,
+            fg=list_fg,
+            selectbackground=select_bg,
+            selectforeground=select_fg,
+            highlightthickness=0,
+            relief="flat"
+        )
+        self.center_listbox.pack(fill="both", expand=True, pady=(6, 8))
+        for item in self.center_options:
+            self.center_listbox.insert("end", item)
+        center_entry_row = CTkFrame(center_frame, fg_color="transparent")
+        center_entry_row.pack(fill="x", pady=(0, 6))
+        center_entry_row.grid_columnconfigure(0, weight=1)
+        self.center_entry = CTkEntry(center_entry_row, placeholder_text="Add center")
+        self.center_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        CTkButton(center_entry_row, text="Add", width=70, command=self._add_center).grid(row=0, column=1, sticky="e")
+        CTkButton(center_frame, text="Remove Selected", command=self._remove_center).pack(anchor="e")
+
+    def _add_stage(self):
+        value = self.stage_entry.get().strip()
+        if not value:
+            return
+        existing = set(self.stage_listbox.get(0, "end"))
+        if value in existing:
+            self.stage_entry.delete(0, "end")
+            return
+        self.stage_listbox.insert("end", value)
+        self.stage_entry.delete(0, "end")
+
+    def _remove_stage(self):
+        selection = self.stage_listbox.curselection()
+        for index in reversed(selection):
+            self.stage_listbox.delete(index)
+
+    def _add_center(self):
+        value = self.center_entry.get().strip()
+        if not value:
+            return
+        existing = set(self.center_listbox.get(0, "end"))
+        if value in existing:
+            self.center_entry.delete(0, "end")
+            return
+        self.center_listbox.insert("end", value)
+        self.center_entry.delete(0, "end")
+
+    def _remove_center(self):
+        selection = self.center_listbox.curselection()
+        for index in reversed(selection):
+            self.center_listbox.delete(index)
+
+    def _build_restrictions_tab(self):
+        CTkLabel(
+            self.restrictions_tab,
+            text="Toggle optional columns that should be collected during scans."
+        ).pack(anchor="w", pady=(12, 8))
+        CTkCheckBox(
+            self.restrictions_tab,
+            text="Enable Exam Column",
+            variable=self.var_exam,
+            command=self._update_apply_state
+        ).pack(anchor="w", pady=6)
+        CTkCheckBox(
+            self.restrictions_tab,
+            text="Enable Homework Column",
+            variable=self.var_homework,
+            command=self._update_apply_state
+        ).pack(anchor="w", pady=6)
+
+    def _build_filetype_tab(self):
+        CTkLabel(
+            self.filetype_tab,
+            text="Choose the preferred format when importing or exporting data."
+        ).pack(anchor="w", pady=(12, 8))
+        CTkRadioButton(
+            self.filetype_tab,
+            text="CSV",
+            variable=self.var_file_type,
+            value="csv",
+            command=self._update_apply_state
+        ).pack(anchor="w", pady=6)
+        CTkRadioButton(
+            self.filetype_tab,
+            text="XLSX",
+            variable=self.var_file_type,
+            value="xlsx",
+            command=self._update_apply_state
+        ).pack(anchor="w", pady=6)
+
+    def _apply_settings(self):
+        if not self._is_mapping_valid():
+            messagebox.showerror("Invalid Mapping", "Each template field must map to a unique column.", parent=self)
+            return
+
+        mapping = self._collect_mapping()
+        stage_options = list(self.stage_listbox.get(0, "end"))
+        center_options = list(self.center_listbox.get(0, "end"))
+        restrictions = {
+            "exam": bool(self.var_exam.get()),
+            "homework": bool(self.var_homework.get()),
+        }
+        file_type = self.var_file_type.get()
+
+        try:
+            with open(MAPPING_FILE, "w", encoding="utf-8") as file:
+                json.dump(mapping, file, indent=2)
+            SETTINGS["stage_options"] = stage_options
+            SETTINGS["center_options"] = center_options
+            SETTINGS["restrictions"].update(restrictions)
+            SETTINGS["file_type"] = file_type
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+                json.dump(SETTINGS, file, indent=2)
+        except OSError as exc:
+            messagebox.showerror("Save Failed", str(exc), parent=self)
+            return
+
+        self.parent_app.column_map = mapping
+        self.column_map = dict(mapping)
+        self.working_mapping = dict(mapping)
+        self.mapping_columns = [value for value in mapping.values() if value]
+
+        if hasattr(self.parent_app, "set_status"):
+            self.parent_app.set_status("Settings saved.")
+        messagebox.showinfo("Settings", "Settings saved successfully.", parent=self)
+        self.on_close()
+
+    def _cancel(self):
+        if hasattr(self.parent_app, "set_status"):
+            self.parent_app.set_status("Settings closed without saving.")
+        self.on_close()
+
+    def on_close(self):
+        if getattr(self.parent_app, "settings_window", None) is self:
+            self.parent_app.settings_window = None
+        self.destroy()
+
+
+class SessionSetupDialog(CTkToplevel):
+    def __init__(self, parent, stages, centers, has_data, callback):
+        super().__init__(parent)
+        self.parent = parent
+        self.stages = stages
+        self.centers = centers
+        self.callback = callback
+        self.has_data = has_data
+        self.title("Start New Session")
+        self.geometry("360x240")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grid_columnconfigure(1, weight=1)
+
+        notice_text = (
+            "Using the imported dataset for this session."
+            if has_data
+            else "No dataset imported yet. A blank roster will be created."
+        )
+        self.notice_var = ctk.StringVar(value=notice_text)
+        self.error_var = ctk.StringVar(value="")
+
+        self._build_form()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.bind("<Return>", lambda _e: self._on_submit())
+        self.bind("<Escape>", lambda _e: self._on_cancel())
+        self.after(10, self._center_on_parent)
+        self.after(50, lambda: self.stage_cb.focus_set())
+
+    def _build_form(self):
+        CTkLabel(
+            self,
+            textvariable=self.notice_var,
+            justify="left",
+            anchor="w",
+            wraplength=320
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(16, 8))
+
+        CTkLabel(self, text="Stage:").grid(row=1, column=0, sticky="w", padx=(16, 8), pady=(0, 4))
+        self.stage_cb = CTkComboBox(self, values=self.stages, state="readonly")
+        self.stage_cb.grid(row=1, column=1, sticky="ew", padx=(0, 16), pady=(0, 4))
+
+        CTkLabel(self, text="Center:").grid(row=2, column=0, sticky="w", padx=(16, 8), pady=(0, 4))
+        self.center_cb = CTkComboBox(self, values=self.centers, state="readonly")
+        self.center_cb.grid(row=2, column=1, sticky="ew", padx=(0, 16), pady=(0, 4))
+
+        CTkLabel(self, text="Session No.:").grid(row=3, column=0, sticky="w", padx=(16, 8), pady=(0, 4))
+        self.session_ent = CTkEntry(self)
+        self.session_ent.grid(row=3, column=1, sticky="ew", padx=(0, 16), pady=(0, 4))
+
+        CTkLabel(
+            self,
+            textvariable=self.error_var,
+            text_color=("#ff6b6b", "#b00020"),
+            justify="left",
+            anchor="w",
+            wraplength=320
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 0))
+
+        btn_frame = CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=(12, 16))
+        CTkButton(btn_frame, text="Start Session", command=self._on_submit).pack(side="left", padx=(0, 8))
+        CTkButton(btn_frame, text="Cancel", command=self._on_cancel).pack(side="left")
+
+        if self.stages:
+            self.stage_cb.set(self.stages[0])
+        if self.centers:
+            self.center_cb.set(self.centers[0])
+
+    def _center_on_parent(self):
+        self.update_idletasks()
+        width = self.winfo_width() or self.winfo_reqwidth()
+        height = self.winfo_height() or self.winfo_reqheight()
+        px = self.parent.winfo_rootx()
+        py = self.parent.winfo_rooty()
+        pw = self.parent.winfo_width()
+        ph = self.parent.winfo_height()
+        x = px + max((pw - width) // 2, 0) if pw else px
+        y = py + max((ph - height) // 2, 0) if ph else py
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.lift()
+        self.focus_force()
+
+    def _on_submit(self):
+        stage = self.stage_cb.get().strip()
+        center = self.center_cb.get().strip()
+        session_no = self.session_ent.get().strip()
+        if not stage or not center or not session_no.isdigit():
+            self.error_var.set("Select stage, center, and enter a numeric session number.")
+            return
+        self.error_var.set("")
+        payload = {
+            "stage": stage,
+            "center": center,
+            "no": int(session_no),
+            "name": f"{stage} {center} session {int(session_no)}"
+        }
+        if self.callback:
+            self.callback(payload)
+            self.callback = None
+        self.destroy()
+
+    def _on_cancel(self):
+        if self.callback:
+            self.callback(None)
+            self.callback = None
+        self.destroy()
 
 class SessionManager:
     def __init__(self, name, params, column_map, data_df):
@@ -390,7 +627,150 @@ def write_data(df, path, **kwargs):
     else:
         df.to_csv(path, index=False, **kwargs)
 
-class App(tk.Tk):
+class PastSessionsWindow(CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Past Sessions")
+        self.geometry("720x480")
+        self.minsize(640, 420)
+        self._paths = {}
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        header = CTkLabel(
+            self,
+            text="Past Sessions",
+            font=("Arial", 20, "bold")
+        )
+        header.pack(anchor="w", padx=24, pady=(24, 12))
+
+        container = CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_rowconfigure(0, weight=1)
+
+        columns = ("name", "modified", "size")
+        self.tree = ttk.Treeview(container, columns=columns, show="headings", selectmode="browse")
+        self.tree.heading("name", text="Session")
+        self.tree.column("name", anchor="w", width=280)
+        self.tree.heading("modified", text="Last Modified")
+        self.tree.column("modified", anchor="center", width=160)
+        self.tree.heading("size", text="Size")
+        self.tree.column("size", anchor="center", width=100)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        self.empty_label = CTkLabel(
+            container,
+            text="No session files found.",
+            font=("Arial", 14)
+        )
+        self.empty_label.place_forget()
+
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<Double-1>", lambda _e: self._open_selected())
+
+        button_bar = CTkFrame(self, fg_color="transparent")
+        button_bar.pack(fill="x", padx=24, pady=(0, 24))
+        button_bar.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="past_actions")
+
+        self.open_btn = CTkButton(
+            button_bar,
+            text="Open in Scanner",
+            state="disabled",
+            command=self._open_selected
+        )
+        self.open_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        self.reveal_btn = CTkButton(
+            button_bar,
+            text="Reveal in Folder",
+            state="disabled",
+            command=self._reveal_selected
+        )
+        self.reveal_btn.grid(row=0, column=1, padx=6, sticky="ew")
+
+        self.refresh_btn = CTkButton(button_bar, text="Refresh", command=self.refresh)
+        self.refresh_btn.grid(row=0, column=2, padx=6, sticky="ew")
+
+        self.close_btn = CTkButton(button_bar, text="Close", command=self._on_close)
+        self.close_btn.grid(row=0, column=3, padx=(6, 0), sticky="ew")
+
+        self.refresh()
+
+    def refresh(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self._paths.clear()
+        if not os.path.isdir(SESSIONS_FOLDER):
+            self._toggle_empty_state(True)
+            self._on_select()
+            return
+        files = []
+        for entry in os.listdir(SESSIONS_FOLDER):
+            path_entry = os.path.join(SESSIONS_FOLDER, entry)
+            if os.path.isfile(path_entry) and entry.lower().endswith((".csv", ".xlsx")):
+                stats = os.stat(path_entry)
+                files.append((path_entry, stats.st_mtime, stats.st_size))
+        files.sort(key=lambda item: item[1], reverse=True)
+        for index, (path_entry, modified, size) in enumerate(files):
+            name = os.path.splitext(os.path.basename(path_entry))[0]
+            stamp = datetime.fromtimestamp(modified).strftime("%d %b %Y %H:%M")
+            size_text = self._format_size(size)
+            iid = f"past_{index}"
+            self.tree.insert("", "end", iid=iid, values=(name, stamp, size_text))
+            self._paths[iid] = path_entry
+        self._toggle_empty_state(len(self._paths) == 0)
+        self._on_select()
+
+    def _toggle_empty_state(self, show):
+        if show:
+            self.empty_label.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            self.empty_label.place_forget()
+
+    def _format_size(self, size_bytes):
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        if size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+
+    def _on_select(self, _event=None):
+        selection = self.tree.selection()
+        state = "normal" if selection else "disabled"
+        self.open_btn.configure(state=state)
+        self.reveal_btn.configure(state=state)
+
+    def _get_selected_path(self):
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        return self._paths.get(selection[0])
+
+    def _open_selected(self):
+        path_entry = self._get_selected_path()
+        if not path_entry:
+            return
+        opened = self.parent._open_session_path(path_entry, read_only=True)
+        if opened:
+            self.parent._refresh_recent_sessions()
+
+    def _reveal_selected(self):
+        path_entry = self._get_selected_path()
+        if not path_entry:
+            return
+        self.parent._reveal_session_path(path_entry)
+
+    def _on_close(self):
+        if hasattr(self.parent, "past_sessions_window"):
+            self.parent.past_sessions_window = None
+        self.destroy()
+
+class App(CTk):
     def __init__(self):
         super().__init__()
         self.title("RFID Attendance Manager")
@@ -398,6 +778,12 @@ class App(tk.Tk):
         self.column_map = {}
         self.data_df    = None
         self.settings_window = None  # <-- Track settings window
+        self.data_panel = None
+        self.data_rows_var = ctk.StringVar(value="")
+        self.data_path_var = ctk.StringVar(value="")
+        self.current_data_path = None
+        self._session_setup = None
+        self.past_sessions_window = None
 
         if os.path.exists(MAPPING_FILE):
             with open(MAPPING_FILE) as f:
@@ -410,67 +796,326 @@ class App(tk.Tk):
         self._load_last_data()
 
     def _build_ui(self):
-        self.original_bg = Image.open(HOME_BG_FILE)
-        self.bg_photo    = ImageTk.PhotoImage(self.original_bg)
-        self.canvas      = tk.Canvas(self, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.bg_id       = self.canvas.create_image(0,0,anchor="nw", image=self.bg_photo)
-        self.footer_id   = self.canvas.create_text(
-            10, 590, anchor="sw",
-            text="Powered by Gawish", fill="white", font=("Arial",9)
-        )
+        self.main_frame = CTkFrame(self, corner_radius=0)
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(1, weight=0)
+
+        content = CTkFrame(self.main_frame, fg_color="transparent")
+        content.grid(row=0, column=0, sticky="nsew")
+        content.grid_columnconfigure(0, weight=3)
+        content.grid_columnconfigure(1, weight=2)
+        content.grid_rowconfigure(0, weight=0)
+        content.grid_rowconfigure(1, weight=0)
+        content.grid_rowconfigure(2, weight=1)
+
+        header = CTkFrame(content, fg_color="transparent")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        header.grid_columnconfigure(1, weight=1)
 
         logo = Image.open(LOGO_FILE)
-        ratio = 100 / logo.width
-        logo = logo.resize((100, int(logo.height*ratio)), Image.LANCZOS)
+        ratio = 56 / logo.width if logo.width else 1
+        logo = logo.resize((56, int(logo.height * ratio)), Image.LANCZOS)
         self.logo_img = ImageTk.PhotoImage(logo)
-        self.logo_id  = self.canvas.create_image(10,10,anchor="nw", image=self.logo_img)
-        self.canvas.tag_bind(self.logo_id, "<Button-1>", lambda e: self.open_settings())
+        CTkLabel(header, image=self.logo_img, text="").grid(row=0, column=0, sticky="w", padx=(0, 12))
 
-        self.import_txt = self.canvas.create_text(
-            300, 240, text="📥 Import excel",
-            font=("Arial",16,"bold"), fill="white"
+        title_holder = CTkFrame(header, fg_color="transparent")
+        title_holder.grid(row=0, column=1, sticky="w")
+        self.title_label = CTkLabel(
+            title_holder,
+            text="RFID Attendance Manager",
+            font=("Arial", 24, "bold")
         )
-        self.canvas.tag_bind(self.import_txt, "<Button-1>", lambda e: self.import_csv())
-        self.canvas.tag_bind(self.import_txt, "<Enter>",
-                             lambda e: self.canvas.itemconfig(self.import_txt, fill="#ddd"))
-        self.canvas.tag_bind(self.import_txt, "<Leave>",
-                             lambda e: self.canvas.itemconfig(self.import_txt, fill="white"))
+        self.title_label.pack(anchor="w")
+        CTkLabel(
+            title_holder,
+            text="Start scans, review sessions, and adjust preferences from one place.",
+            font=("Arial", 14)
+        ).pack(anchor="w", pady=(4, 0))
 
-        self.scan_txt = self.canvas.create_text(
-            500, 240, text="🔍 Scan",
-            font=("Arial",16,"bold"), fill="white"
+        self._build_data_status_panel(content)
+
+        actions_frame = CTkFrame(content, fg_color="transparent")
+        actions_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 24))
+        actions_frame.grid_columnconfigure((0, 1), weight=1, uniform="actions")
+        actions_frame.grid_rowconfigure((0, 1), weight=1)
+
+        button_specs = [
+            ("Import Data", self.import_csv),
+            ("Start New Session", self.open_scan_window),
+            ("View Past Sessions", self.view_past_sessions),
+            ("Settings", self.open_settings),
+        ]
+        self.dashboard_buttons = []
+        for index, (label, handler) in enumerate(button_specs):
+            row, col = divmod(index, 2)
+            btn = CTkButton(
+                actions_frame,
+                text=label,
+                command=handler,
+                height=120,
+                font=("Arial", 18, "bold")
+            )
+            btn.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
+            self.dashboard_buttons.append(btn)
+
+        recent_frame = CTkFrame(content, fg_color="transparent")
+        recent_frame.grid(row=2, column=1, sticky="nsew")
+        recent_frame.grid_rowconfigure(1, weight=1)
+
+        CTkLabel(
+            recent_frame,
+            text="Recent Sessions",
+            font=("Arial", 18, "bold")
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        tree_container = CTkFrame(recent_frame, fg_color="transparent")
+        tree_container.grid(row=1, column=0, sticky="nsew")
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+
+        style = ttk.Style(self)
+        style.configure(
+            "Dashboard.Treeview",
+            rowheight=30,
+            borderwidth=0,
+            font=("Arial", 12)
         )
-        self.canvas.tag_bind(self.scan_txt, "<Button-1>", lambda e: self.open_scan_window())
-        self.canvas.tag_bind(self.scan_txt, "<Enter>",
-                             lambda e: self.canvas.itemconfig(self.scan_txt, fill="#ddd"))
-        self.canvas.tag_bind(self.scan_txt, "<Leave>",
-                             lambda e: self.canvas.itemconfig(self.scan_txt, fill="white"))
+        style.configure(
+            "Dashboard.Treeview.Heading",
+            font=("Arial", 12, "bold")
+        )
+        style.map(
+            "Dashboard.Treeview",
+            background=[("selected", "#1f6aa5")],
+            foreground=[("selected", "#ffffff")]
+        )
 
-        self.bind("<Configure>", self._on_resize)
+        self.recent_tree = ttk.Treeview(
+            tree_container,
+            columns=("name", "modified"),
+            show="headings",
+            selectmode="browse",
+            style="Dashboard.Treeview"
+        )
+        self.recent_tree.heading("name", text="Session")
+        self.recent_tree.column("name", anchor="w", width=220)
+        self.recent_tree.heading("modified", text="Last Modified")
+        self.recent_tree.column("modified", anchor="center", width=160)
+        self.recent_tree.grid(row=0, column=0, sticky="nsew")
 
-    def _on_resize(self, e):
-        if e.widget is self:
-            w, h = e.width, e.height
-            bg = self.original_bg.resize((w,h), Image.LANCZOS)
-            self.bg_photo = ImageTk.PhotoImage(bg)
-            self.canvas.itemconfig(self.bg_id, image=self.bg_photo)
-            self.canvas.coords(self.footer_id, 10, h-10)
-            self.canvas.coords(self.import_txt, 300, h/2)
-            self.canvas.coords(self.scan_txt, 500, h/2)
+        scrollbar = ttk.Scrollbar(
+            tree_container,
+            orient="vertical",
+            command=self.recent_tree.yview
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.recent_tree.configure(yscrollcommand=scrollbar.set)
+        self.recent_tree.bind("<<TreeviewSelect>>", self._on_recent_select)
+        self.recent_tree.bind("<Double-1>", lambda _e: self._open_selected_session())
+
+        actions_bar = CTkFrame(recent_frame, fg_color="transparent")
+        actions_bar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        actions_bar.grid_columnconfigure((0, 1), weight=1, uniform="recent_actions")
+
+        self.recent_open_button = CTkButton(
+            actions_bar,
+            text="Open",
+            command=self._open_selected_session,
+            state="disabled"
+        )
+        self.recent_open_button.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        self.recent_reveal_button = CTkButton(
+            actions_bar,
+            text="Reveal in Folder",
+            command=self._reveal_selected_session,
+            state="disabled"
+        )
+        self.recent_reveal_button.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+        self.status_var = ctk.StringVar(value="Ready.")
+        self.status_label = CTkLabel(
+            self.main_frame,
+            textvariable=self.status_var,
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.status_label.grid(row=1, column=0, sticky="ew", pady=(16, 0))
+
+        self._recent_session_paths = {}
+        self._refresh_recent_sessions()
+
+    def _build_data_status_panel(self, parent):
+        panel = CTkFrame(parent, fg_color=("#1f2933", "#f2f3f5"), corner_radius=12)
+        panel.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        panel.grid_columnconfigure(0, weight=1)
+        CTkLabel(
+            panel,
+            text="Data Loaded",
+            font=("Arial", 18, "bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 4))
+        CTkLabel(
+            panel,
+            textvariable=self.data_rows_var,
+            font=("Arial", 14),
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 2))
+        CTkLabel(
+            panel,
+            textvariable=self.data_path_var,
+            font=("Arial", 12),
+            anchor="w",
+            justify="left",
+            wraplength=520
+        ).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
+        panel.grid_remove()
+        self.data_panel = panel
+
+    def _update_data_status_panel(self, path, rows):
+        if not self.data_panel:
+            return
+        self.data_rows_var.set(f"Rows: {rows:,}")
+        self.data_path_var.set(f"File: {path}")
+        self.data_panel.grid()
+        self.current_data_path = path
+
+    def _hide_data_status_panel(self):
+        if self.data_panel:
+            self.data_panel.grid_remove()
+        self.data_rows_var.set("")
+        self.data_path_var.set("")
+        self.current_data_path = None
+
+
+    def set_status(self, message):
+        if hasattr(self, "status_var"):
+            self.status_var.set(message)
+
+    def _refresh_recent_sessions(self):
+        if not hasattr(self, "recent_tree"):
+            return
+        for item in self.recent_tree.get_children():
+            self.recent_tree.delete(item)
+        self._recent_session_paths = {}
+        if not os.path.isdir(SESSIONS_FOLDER):
+            self._on_recent_select()
+            return
+        files = []
+        for entry in os.listdir(SESSIONS_FOLDER):
+            path_entry = os.path.join(SESSIONS_FOLDER, entry)
+            if os.path.isfile(path_entry) and entry.lower().endswith((".csv", ".xlsx")):
+                files.append((path_entry, os.path.getmtime(path_entry)))
+        files.sort(key=lambda item: item[1], reverse=True)
+        for index, (path_entry, modified) in enumerate(files[:10]):
+            name = os.path.splitext(os.path.basename(path_entry))[0]
+            stamp = datetime.fromtimestamp(modified).strftime("%d %b %Y %H:%M")
+            iid = f"recent_{index}"
+            self.recent_tree.insert("", "end", iid=iid, values=(name, stamp))
+            self._recent_session_paths[iid] = path_entry
+        self._on_recent_select()
+
+    def _on_recent_select(self, _event=None):
+        selection = self.recent_tree.selection() if hasattr(self, "recent_tree") else ()
+        state = "normal" if selection else "disabled"
+        if hasattr(self, "recent_open_button"):
+            self.recent_open_button.configure(state=state)
+        if hasattr(self, "recent_reveal_button"):
+            self.recent_reveal_button.configure(state=state)
+
+    def _get_selected_session_path(self):
+        if not hasattr(self, "recent_tree"):
+            return None
+        selection = self.recent_tree.selection()
+        if not selection:
+            return None
+        return self._recent_session_paths.get(selection[0])
+
+    def _open_session_path(self, path_entry, *, read_only=False):
+        try:
+            name = os.path.splitext(os.path.basename(path_entry))[0]
+            df = read_data(path_entry)
+            sm = SessionManager(name, {}, self.column_map, df)
+            ScanWindow(self, sm, read_only=read_only)
+            if read_only:
+                self.set_status(f"Session '{name}' opened in view-only mode.")
+            else:
+                self.set_status(f"Session '{name}' opened.")
+            return True
+        except Exception as exc:
+            messagebox.showerror("Open Failed", str(exc))
+            self.set_status("Failed to open session.")
+            return False
+
+    def _reveal_session_path(self, path_entry):
+        try:
+            if sys.platform.startswith("win"):
+                target = os.path.normpath(path_entry)
+                explorer_cmd = f'/select,"{target}"'
+                subprocess.Popen(["explorer", explorer_cmd])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path_entry])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path_entry)])
+            self.set_status(f"Revealed '{os.path.basename(path_entry)}'.")
+            return True
+        except Exception as exc:
+            messagebox.showerror("Reveal Failed", str(exc))
+            self.set_status("Failed to reveal session.")
+            return False
+
+    def _open_selected_session(self):
+        path_entry = self._get_selected_session_path()
+        if not path_entry:
+            return
+        self._open_session_path(path_entry, read_only=True)
+
+    def _reveal_selected_session(self):
+        path_entry = self._get_selected_session_path()
+        if not path_entry:
+            return
+        self._reveal_session_path(path_entry)
+
+    def view_past_sessions(self):
+        if self.past_sessions_window is not None and self.past_sessions_window.winfo_exists():
+            self.past_sessions_window.focus_force()
+            self.past_sessions_window.lift()
+            return
+        self.past_sessions_window = PastSessionsWindow(self)
+        self.past_sessions_window.focus_force()
+        self.set_status("Browsing past sessions.")
+
 
     def _load_last_data(self):
         self.data_df = None  # Always reset on startup
-        if os.path.exists(LAST_DATA_FILE):
+        self._hide_data_status_panel()
+        if not os.path.exists(LAST_DATA_FILE):
+            self.set_status("Ready.")
+            return
+        try:
             with open(LAST_DATA_FILE) as f:
                 info = json.load(f)
-            path = info.get("path")
-            if path and os.path.exists(path):
-                self.data_df = read_data(path)
+        except Exception:
+            self.set_status("Ready.")
+            return
+        path = info.get("path")
+        if not path or not os.path.exists(path):
+            self.set_status("Ready.")
+            return
+        try:
+            df = read_data(path)
+        except Exception:
+            self.set_status("Ready.")
+            return
+        self.data_df = df
+        self._update_data_status_panel(path, len(df))
+        self.set_status(f"Restored {len(df)} records from {os.path.basename(path)}.")
 
     def open_settings(self):
         # Only open one settings window at a time
-        if self.settings_window is not None and tk.Toplevel.winfo_exists(self.settings_window):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
             self.settings_window.focus_force()
             self.settings_window.lift()
             return
@@ -479,13 +1124,17 @@ class App(tk.Tk):
 
     def _on_settings_close(self):
         if self.settings_window is not None:
-            self.settings_window.destroy()
-            self.settings_window = None
+            if hasattr(self.settings_window, 'on_close'):
+                self.settings_window.on_close()
+            else:
+                self.settings_window.destroy()
+                self.settings_window = None
 
     def import_csv(self):
         # Check if template is configured
         if not self.column_map:
             messagebox.showwarning("No Template", "Please configure a template first.")
+            self.set_status("Import canceled - configure column template first.")
             return
 
         file_type = SETTINGS.get("file_type", "csv")
@@ -494,7 +1143,9 @@ class App(tk.Tk):
             title=f"Select {file_type.upper()}",
             filetypes=[(f"{file_type.upper()} files", ext)]
         )
-        if not path: return
+        if not path:
+            self.set_status("Import canceled.")
+            return
         try:
             df = read_data(path)
             # Pad card_id column to 8 digits and assign 'null N' for blanks
@@ -521,137 +1172,364 @@ class App(tk.Tk):
             if ts_col in df.columns:
                 df[ts_col] = ""
         except Exception as e:
-            return messagebox.showerror("Load Error", str(e))
+            messagebox.showerror("Load Error", str(e))
+            self.set_status("Import failed.")
+            return
         self.data_df = df
         with open(LAST_DATA_FILE, "w") as f:
             json.dump({"path": path}, f, indent=2)
-        messagebox.showinfo("Loaded", f"{len(df)} records imported.")
+        self._update_data_status_panel(path, len(df))
+        self.set_status(f"Imported {len(df)} records from {os.path.basename(path)}.")
 
     def open_scan_window(self):
+        if self._session_setup is not None and self._session_setup.winfo_exists():
+            self._session_setup.focus_force()
+            return
+        self._session_setup = SessionSetupDialog(
+            self,
+            SETTINGS["stage_options"],
+            SETTINGS["center_options"],
+            has_data=self.data_df is not None,
+            callback=self._on_session_setup_finished,
+        )
+
+    def _on_session_setup_finished(self, payload):
+        self._session_setup = None
+        if not payload:
+            self.set_status("Session setup canceled.")
+            return
         if self.data_df is None:
-            if not messagebox.askyesno("No data imported","Import excel first. Continue anyway?"):
-                return
-            # Create an empty DataFrame with default columns
-            cols = ["card_id", "student_id", "name", "phone", "attendance", "notes", "timestamp"]
-            if SETTINGS["restrictions"].get("exam"):
-                cols.insert(4, "exam")
-            if SETTINGS["restrictions"].get("homework"):
-                cols.insert(5 if SETTINGS["restrictions"].get("exam") else 4, "homework")
-            self.data_df = pd.DataFrame(columns=cols)
-        dlg = SessionDialog(self, SETTINGS["stage_options"], SETTINGS["center_options"])
-        if not getattr(dlg, "result", None): return
-        name, params = dlg.result
+            self.data_df = self._create_blank_roster()
+            self._hide_data_status_panel()
+            self.set_status("Starting session with a blank roster.")
+        name = payload["name"]
+        params = {"stage": payload["stage"], "center": payload["center"], "no": payload["no"]}
         file_type = SETTINGS.get("file_type", "csv")
         ext = "xlsx" if file_type == "xlsx" else "csv"
         session_path = os.path.join(SESSIONS_FOLDER, f"{name}.{ext}")
+        created = False
         if not os.path.exists(session_path):
             write_data(self.data_df, session_path)
+            created = True
         session_df = read_data(session_path)
         sm = SessionManager(name, params, self.column_map, session_df)
+        self._refresh_recent_sessions()
+        if self.past_sessions_window is not None and self.past_sessions_window.winfo_exists():
+            self.past_sessions_window.refresh()
         ScanWindow(self, sm)
-class ScanWindow(tk.Toplevel):
-    def __init__(self, parent, session_mgr):
-        super().__init__(parent)
-        self.parent       = parent
-        self.sm           = session_mgr
-        self.restrictions = self.sm.restrictions
-        # Always use the session file as the base
-        self.df = read_data(self.sm.session_path).fillna("")
-        self.mapping = self.sm.mapping
-        # --- Ensure mapping always has defaults ---
-        if not self.mapping:
-            self.mapping = {col: col for col in self.df.columns}
+        if created:
+            self.set_status(f"Session '{name}' created.")
+        else:
+            self.set_status(f"Session '{name}' ready.")
 
-        self.original_bg  = Image.open(HOME_BG_FILE)
-        self.bg_photo     = ImageTk.PhotoImage(self.original_bg)
-        self.bg_label     = tk.Label(self, image=self.bg_photo)
+    def _create_blank_roster(self):
+        columns = ["card_id", "student_id", "name", "phone"]
+        if SETTINGS["restrictions"].get("exam"):
+            columns.append("exam")
+        if SETTINGS["restrictions"].get("homework"):
+            columns.append("homework")
+        columns.extend(["attendance", "notes", "timestamp"])
+        return pd.DataFrame(columns=columns)
+class SessionSummaryDialog(CTkToplevel):
+    def __init__(self, parent, session_name, summary, session_path, callback):
+        super().__init__(parent)
+        self.parent = parent
+        self.session_name = session_name
+        self.summary = summary
+        self.session_path = session_path
+        self._callback = callback
+
+        self.title("Session Summary")
+        self.geometry("420x360")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        header = CTkLabel(
+            self,
+            text=f"Summary: {session_name}",
+            font=("Arial", 20, "bold")
+        )
+        header.pack(anchor="w", padx=24, pady=(24, 12))
+
+        content = CTkFrame(self, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=24)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_columnconfigure(1, weight=1)
+
+        rows = [
+            ("Total Students", f"{summary['total']}")
+        ]
+        rows.append(("Attended", f"{summary['attended']} ({summary['percent']})"))
+        if summary.get('missing_exam') is not None:
+            rows.append(("Missing Exam", f"{summary['missing_exam']}"))
+        if summary.get('missing_hw') is not None:
+            rows.append(("Missing Homework", f"{summary['missing_hw']}"))
+        rows.append(("Manual Additions", f"{summary['manual_additions']}"))
+        rows.append(("Cancellations", f"{summary['cancellations']}"))
+
+        for idx, (label, value) in enumerate(rows):
+            CTkLabel(content, text=label, font=("Arial", 13, "bold")).grid(row=idx, column=0, sticky="w", pady=4)
+            CTkLabel(content, text=value, font=("Arial", 13)).grid(row=idx, column=1, sticky="e", pady=4)
+
+        button_bar = CTkFrame(self, fg_color="transparent")
+        button_bar.pack(fill="x", padx=24, pady=(12, 24))
+        button_bar.grid_columnconfigure((0, 1, 2), weight=1, uniform="summary_actions")
+
+        CTkButton(button_bar, text="Save & Close", command=self._on_save_close).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+        CTkButton(button_bar, text="Open Session File", command=self._open_session_file).grid(row=0, column=1, padx=6, sticky="ew")
+        CTkButton(button_bar, text="Return to Scanning", command=self._on_return_to_scan).grid(row=0, column=2, padx=(6, 0), sticky="ew")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_return_to_scan)
+
+    def _emit(self, action):
+        if self._callback:
+            callback = self._callback
+            self._callback = None
+            callback(action)
+
+    def _on_save_close(self):
+        self.destroy()
+        self._emit("save_close")
+
+    def _on_return_to_scan(self):
+        self.destroy()
+        self._emit("return")
+
+    def _open_session_file(self):
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(self.session_path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", self.session_path])
+            else:
+                subprocess.Popen(["xdg-open", self.session_path])
+        except Exception as exc:
+            messagebox.showerror("Open Failed", str(exc), parent=self)
+
+
+class ScanWindow(CTkToplevel):
+    def __init__(self, parent, session_mgr, read_only=False):
+        super().__init__(parent)
+        self.parent = parent
+        self.sm = session_mgr
+        self.read_only = read_only
+        self.restrictions = self.sm.restrictions
+        self.df = read_data(self.sm.session_path).fillna("")
+        self.mapping = self.sm.mapping or {col: col for col in self.df.columns}
+
+        self.original_bg = Image.open(HOME_BG_FILE)
+        self.bg_photo = ImageTk.PhotoImage(self.original_bg)
+        self.bg_label = CTkLabel(self, text="", image=self.bg_photo)
         self.bg_label.place(relwidth=1, relheight=1)
         self.bind("<Configure>", self._on_bg_resize)
-        self.bind("<Button-1>",     self._on_click_anywhere)
 
         self.title("Scan Attendance")
-        self.geometry("800x500")
+        self.geometry("800x520")
+        self.protocol("WM_DELETE_WINDOW", self._on_end_scan)
 
-        # Initialize IID list before loading
         self._all_iids = []
+        self._visible_iids = []
+        self._search_entries = []
+        self.search_vars = {}
+        self._gate_context = None
+        self._summary_dialog = None
+        self._manual_additions = 0
+        self._cancellations = 0
+
+        self.stats_vars = {
+            "total": ctk.StringVar(value="0"),
+            "attended": ctk.StringVar(value="0"),
+            "percent": ctk.StringVar(value="0%"),
+            "missing_exam": ctk.StringVar(value="0"),
+            "missing_hw": ctk.StringVar(value="0"),
+        }
+        self.gate_message_var = ctk.StringVar(value="")
 
         self._build_ui()
+        self._apply_treeview_style()
         self._load_existing()
+        self._refresh_stats()
 
-        self.scan_entry.focus_set()
+        if not self.read_only:
+            self.bind_all("<FocusIn>", self._global_focus_in, add="+")
+            self.scan_entry.focus_set()
 
-    def _on_bg_resize(self, e):
-        if e.widget is self:
-            bg = self.original_bg.resize((e.width, e.height), Image.LANCZOS)
+    def _on_bg_resize(self, event):
+        if event.widget is self:
+            bg = self.original_bg.resize((event.width, event.height), Image.LANCZOS)
             self.bg_photo = ImageTk.PhotoImage(bg)
-            self.bg_label.config(image=self.bg_photo)
+            self.bg_label.configure(image=self.bg_photo)
 
     def _build_ui(self):
-        # Scan Entry
-        self.scan_entry = ttk.Entry(self)
-        self.scan_entry.place(x=10, y=10, width=200)
-        self.scan_entry.bind("<Return>", lambda e: self._on_scan())
+        top_bar = CTkFrame(self, fg_color="transparent")
+        top_bar.pack(fill="x", padx=12, pady=(16, 8))
+        top_bar.grid_columnconfigure(1, weight=1)
 
-        # Header
-        hdr = ttk.Frame(self); hdr.pack(fill="x", pady=5, padx=10)
-        ttk.Label(hdr, text=f"Session: {self.sm.name}",
-                  font=("Arial",12,"bold")).pack(side="left")
-        # End Scan now runs _on_end_scan
-        ttk.Button(hdr, text="End Scan", command=self._on_end_scan).pack(side="right")
+        scan_block = CTkFrame(top_bar, fg_color="transparent")
+        scan_block.grid(row=0, column=0, sticky="w")
+        CTkLabel(scan_block, text="Scan Entry", font=("Arial", 12, "bold")).pack(anchor="w")
+        self.scan_entry = CTkEntry(scan_block, width=240, placeholder_text="Scan card ID")
+        self.scan_entry.pack(anchor="w", pady=(4, 0))
+        self.scan_entry.bind("<Return>", lambda _e: self._on_scan())
 
-        # Search Fields
-        sf = ttk.Frame(self); sf.pack(fill="x", padx=10, pady=5)
-        for i, field in enumerate(("student_id","name","phone")):
-            ph = field.replace("_"," ").title()
-            ent = ttk.Entry(sf, foreground="grey")
-            ent.insert(0, ph)
-            ent.grid(row=0, column=i, sticky="ew", padx=5)
-            ent.bind("<FocusIn>",  lambda e,en=ent,ph=ph: self._clear_placeholder(en,ph))
-            ent.bind("<FocusOut>", lambda e,en=ent,ph=ph: self._restore_placeholder(en,ph))
-            ent.bind("<KeyRelease>", self._filter_all)
-            setattr(self, f"search_{field}", ent)
-            sf.columnconfigure(i, weight=1)
+        self.pb = CTkProgressBar(scan_block, mode="indeterminate", width=240)
+        self.pb.pack(anchor="w", pady=(6, 0))
+        self.pb.stop()
 
-        # Columns (with restrictions)
-        cols = ["card_id","student_id","name","phone"]
-        if self.restrictions.get("exam"):     cols.append("exam")
-        if self.restrictions.get("homework"): cols.append("homework")
-        cols += ["attendance","notes","timestamp"]
+        if self.read_only:
+            self.scan_entry.configure(state="disabled")
+            self.scan_entry.unbind("<Return>")
+            scan_block.grid_remove()
 
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
-        for c in cols:
-            self.tree.heading(c, text=c.replace("_"," ").title())
-            self.tree.column(c, anchor="center", width=100)
-        self.tree.pack(fill="both", expand=True, padx=10, pady=5)
-        self.tree.bind("<Double-1>", self._on_row_double_click)
+        session_text = f"Session: {self.sm.name}"
+        if self.read_only:
+            session_text += " (read-only)"
+        session_label = CTkLabel(top_bar, text=session_text, font=("Arial", 12))
+        session_label.grid(row=0, column=1, sticky="w", padx=18)
 
-        # Control Bar
-        ctl = ttk.Frame(self); ctl.pack(fill="x", padx=10, pady=5)
-        ttk.Button(ctl, text="Add Student", command=self._on_add_student_flow).pack(side="left")
-        self.pb = ttk.Progressbar(ctl, mode="determinate", maximum=2000)
-        self.pb.pack(side="right", fill="x", expand=True)
+        self.end_button = CTkButton(top_bar, text="End Session", command=self._on_end_scan)
+        self.end_button.grid(row=0, column=2, sticky="e")
+        if self.read_only:
+            self.end_button.configure(text="Close")
 
-        self._search_entries = [
-            getattr(self, f"search_{field}") for field in ("student_id", "name", "phone")
+        self._build_stats_strip()
+
+        search_frame = CTkFrame(self, fg_color="transparent")
+        search_frame.pack(fill="x", padx=12, pady=(0, 10))
+        search_fields = [
+            ("student_id", "Student ID"),
+            ("name", "Name"),
+            ("phone", "Phone"),
         ]
-        self.bind_all("<FocusIn>", self._global_focus_in, add="+")
+        for idx, (field, placeholder) in enumerate(search_fields):
+            var = ctk.StringVar()
+            entry = CTkEntry(search_frame, textvariable=var, placeholder_text=placeholder)
+            entry.grid(row=0, column=idx, sticky="ew", padx=5)
+            var.trace_add("write", self._on_search_change)
+            self.search_vars[field] = var
+            self._search_entries.append(entry)
+            search_frame.grid_columnconfigure(idx, weight=1)
+
+        self.gate_panel = CTkFrame(self, fg_color=("#1f2933", "#e2e8f0"), corner_radius=8)
+        self.gate_label = CTkLabel(
+            self.gate_panel,
+            textvariable=self.gate_message_var,
+            wraplength=760,
+            font=("Arial", 12)
+        )
+        self.gate_label.pack(pady=(10, 4), padx=12, anchor="w")
+        gate_buttons = CTkFrame(self.gate_panel, fg_color="transparent")
+        gate_buttons.pack(pady=(0, 10))
+        self.gate_cancel_btn = CTkButton(gate_buttons, text="Cancel", command=self._gate_cancel)
+        self.gate_cancel_btn.pack(side="left", padx=6)
+        self.gate_attend_btn = CTkButton(gate_buttons, text="Attend", command=self._gate_attend)
+        self.gate_attend_btn.pack(side="left", padx=6)
+        self.gate_panel.pack(fill="x", padx=12, pady=(0, 10))
+        self.gate_panel.pack_forget()
+        if self.read_only:
+            self.gate_cancel_btn.configure(state="disabled")
+            self.gate_attend_btn.configure(state="disabled")
+
+        cols = ["card_id", "student_id", "name", "phone"]
+        if self.restrictions.get("exam"):
+            cols.append("exam")
+        if self.restrictions.get("homework"):
+            cols.append("homework")
+        cols += ["attendance", "notes", "timestamp"]
+
+        tree_container = CTkFrame(self, fg_color="transparent")
+        tree_container.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(tree_container, columns=cols, show="headings", selectmode="browse")
+        for col in cols:
+            self.tree.heading(col, text=col.replace("_", " ").title())
+            self.tree.column(col, anchor="center", width=110)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.bind("<Double-1>", self._on_row_double_click)
+        if self.read_only:
+            self.tree.unbind("<Double-1>")
+
+        self.control_frame = CTkFrame(self, fg_color="transparent")
+        self.control_frame.pack(fill="x", padx=12, pady=(0, 12))
+        self.add_student_button = CTkButton(self.control_frame, text="Add Student", command=self._on_add_student_flow)
+        self.add_student_button.pack(side="left")
+        if self.read_only:
+            self.control_frame.pack_forget()
+
+    def _build_stats_strip(self):
+        self.stats_frame = CTkFrame(self, fg_color=("#12263a", "#f1f5f9"), corner_radius=10)
+        self.stats_frame.pack(fill="x", padx=12, pady=(0, 10))
+        stats = [
+            ("Total Rows", self.stats_vars["total"]),
+            ("Attended", self.stats_vars["attended"]),
+            ("Attendance %", self.stats_vars["percent"]),
+        ]
+        if self.restrictions.get("exam"):
+            stats.append(("Missing Exam", self.stats_vars["missing_exam"]))
+        if self.restrictions.get("homework"):
+            stats.append(("Missing H.W.", self.stats_vars["missing_hw"]))
+        for idx, (label, var) in enumerate(stats):
+            block = CTkFrame(self.stats_frame, fg_color="transparent")
+            block.grid(row=0, column=idx, sticky="w", padx=(12 if idx == 0 else 8, 8), pady=10)
+            CTkLabel(block, text=label, font=("Arial", 11, "bold")).pack(anchor="w")
+            CTkLabel(block, textvariable=var, font=("Arial", 16)).pack(anchor="w")
+        for idx in range(len(stats)):
+            self.stats_frame.grid_columnconfigure(idx, weight=1)
+
+    def _apply_treeview_style(self):
+        mode = ctk.get_appearance_mode()
+        if mode == "Dark":
+            bg = "#1e1e1e"
+            fg = "#f2f2f2"
+            heading_bg = "#1f6aa5"
+            heading_fg = "#ffffff"
+        else:
+            bg = "#ffffff"
+            fg = "#1a1a1a"
+            heading_bg = "#e1efff"
+            heading_fg = "#1a1a1a"
+        select_bg = "#1f6aa5"
+        select_fg = "#ffffff"
+
+        style = ttk.Style(self)
+        style.configure(
+            "CTk.Treeview",
+            background=bg,
+            foreground=fg,
+            fieldbackground=bg,
+            rowheight=32,
+            font=("Arial", 11)
+        )
+        style.map(
+            "CTk.Treeview",
+            background=[("selected", select_bg)],
+            foreground=[("selected", select_fg)]
+        )
+        style.configure(
+            "CTk.Treeview.Heading",
+            background=heading_bg,
+            foreground=heading_fg,
+            font=("Arial", 11, "bold")
+        )
+        style.map(
+            "CTk.Treeview.Heading",
+            background=[("active", heading_bg)]
+        )
+        self.tree.configure(style="CTk.Treeview")
 
     def _load_existing(self):
         def pad_card_id(val):
-            val_str = str(val)
+            val_str = str(val).strip()
             if val_str.isdigit():
                 return val_str.zfill(8)
             return val_str
-
-        def clean(val):
-            # Handles None, float nan, and string "nan"
-            if val is None:
-                return ""
-            if isinstance(val, float) and pd.isna(val):
-                return ""
-            if isinstance(val, str) and val.strip().lower() == "nan":
-                return ""
-            return str(val)
 
         cols = self.tree["columns"]
         session_records = {pad_card_id(rec.get("card_id", "")): rec for rec in self.sm.records}
@@ -661,496 +1539,520 @@ class ScanWindow(tk.Toplevel):
             card_id_col = self.mapping.get("card_id", "card_id")
             cid = pad_card_id(row.get(card_id_col, ""))
             rec = session_records.pop(cid, None)
-            vals = []
+            values = []
             for col in cols:
                 mapped_col = self.mapping.get(col, col)
                 if rec is not None and col in rec:
                     val = rec.get(col, "")
                 else:
                     val = row.get(mapped_col, "")
-                vals.append(clean(val))
-            self.tree.insert("", "end", iid=cid, values=tuple(vals))
+                values.append(self._clean_value(val))
+            self.tree.insert("", "end", iid=cid, values=tuple(values))
             self._all_iids.append(cid)
 
-        # Add any manual/canceled records not in imported data
-        for rec in self.sm.records:
-            cid = pad_card_id(rec.get("card_id", ""))
-            if not self.tree.exists(cid):
-                vals = []
-                for col in cols:
-                    val = rec.get(col, "")
-                    vals.append(clean(val))
-                self.tree.insert("", "end", iid=cid, values=tuple(vals))
-                self._all_iids.append(cid)
-            # Only update attendance, notes, and timestamp columns
-            self._update_row(cid, clean(rec.get("attendance", "")), clean(rec.get("notes", "")))
-
-    def _clear_placeholder(self, entry, placeholder):
-        if entry.get() == placeholder:
-            entry.delete(0, "end")
-            entry.config(foreground="black")
-
-    def _restore_placeholder(self, entry, placeholder):
-        if not entry.get().strip():
-            entry.insert(0, placeholder)
-            entry.config(foreground="grey")
-
-    def _on_click_anywhere(self, event):
-        if not isinstance(event.widget, ttk.Entry):
-            self.focus()
-            for field in ("student_id","name","phone"):
-                ent = getattr(self, f"search_{field}")
-                ph  = field.replace("_"," ").title()
-                if not ent.get().strip():
-                    ent.delete(0, "end")
-                    ent.insert(0, ph)
-                    ent.config(foreground="grey")
-
-    def _filter_all(self, *_):
-        terms = {}
-        for fld in ("student_id","name","phone"):
-            ent = getattr(self, f"search_{fld}")
-            val = ent.get().strip()
-            ph  = fld.replace("_"," ").title()
-            if val.lower() == ph.lower(): val = ""
-            terms[fld] = val.lower()
-
-        if not any(terms.values()):
-            for iid in self._all_iids:
-                self.tree.reattach(iid, '', 'end')
-            return
+        for cid, rec in session_records.items():
+            values = [self._clean_value(rec.get(col, "")) for col in cols]
+            self.tree.insert("", "end", iid=cid, values=tuple(values))
+            self._all_iids.append(cid)
 
         for iid in self._all_iids:
-            keep = all(
-                (not terms[f]) or (terms[f] in self.tree.set(iid, f).lower())
-                for f in terms
-            )
-            if keep: self.tree.reattach(iid, '', 'end')
-            else:    self.tree.detach(iid)
+            attendance = self._clean_value(self.tree.set(iid, "attendance"))
+            notes = self._clean_value(self.tree.set(iid, "notes"))
+            self._update_row(iid, attendance, notes)
+
+    def _clean_value(self, value):
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        text = str(value).strip()
+        if text.lower() == "nan":
+            return ""
+        return text
+
+    def _refresh_stats(self):
+        total = len(self._all_iids)
+        attended = 0
+        missing_exam = 0
+        missing_hw = 0
+        for iid in self._all_iids:
+            if not self.tree.exists(iid):
+                continue
+            attendance = self._clean_value(self.tree.set(iid, "attendance")).lower()
+            if attendance == "attend":
+                attended += 1
+            if self.restrictions.get("exam"):
+                if not self._clean_value(self.tree.set(iid, "exam")):
+                    missing_exam += 1
+            if self.restrictions.get("homework"):
+                if not self._clean_value(self.tree.set(iid, "homework")):
+                    missing_hw += 1
+        percent = "0%"
+        if total:
+            percent = f"{(attended / total) * 100:.1f}%"
+        self.stats_vars["total"].set(f"{total}")
+        self.stats_vars["attended"].set(f"{attended}")
+        self.stats_vars["percent"].set(percent)
+        if self.restrictions.get("exam"):
+            self.stats_vars["missing_exam"].set(f"{missing_exam}")
+        if self.restrictions.get("homework"):
+            self.stats_vars["missing_hw"].set(f"{missing_hw}")
+
+    def _collect_session_summary(self):
+        total = sum(1 for iid in self._all_iids if self.tree.exists(iid))
+        attended = 0
+        missing_exam = 0
+        missing_hw = 0
+        for iid in self._all_iids:
+            if not self.tree.exists(iid):
+                continue
+            attendance = self._clean_value(self.tree.set(iid, "attendance")).lower()
+            if attendance == "attend":
+                attended += 1
+            if self.restrictions.get("exam"):
+                if not self._clean_value(self.tree.set(iid, "exam")):
+                    missing_exam += 1
+            if self.restrictions.get("homework"):
+                if not self._clean_value(self.tree.set(iid, "homework")):
+                    missing_hw += 1
+        percent = "0%"
+        if total:
+            percent = f"{(attended / total) * 100:.1f}%"
+        return {
+            "total": total,
+            "attended": attended,
+            "percent": percent,
+            "missing_exam": missing_exam if self.restrictions.get("exam") else None,
+            "missing_hw": missing_hw if self.restrictions.get("homework") else None,
+            "manual_additions": self._manual_additions,
+            "cancellations": self._cancellations,
+        }
+
+    def _handle_summary_result(self, action):
+        self._summary_dialog = None
+        if action == "save_close":
+            self._finalize_and_close()
+        elif action == "return":
+            if not getattr(self, "read_only", False) and hasattr(self, "scan_entry"):
+                self.after_idle(self.scan_entry.focus_set)
+
+    def _finalize_and_close(self, status_message=None):
+        self._summary_dialog = None
+        if status_message is None:
+            status_message = f"Session '{self.sm.name}' saved and closed."
+        if self.winfo_exists():
+            self.destroy()
+        if hasattr(self.parent, "_refresh_recent_sessions"):
+            self.parent._refresh_recent_sessions()
+        if getattr(self.parent, "past_sessions_window", None) and self.parent.past_sessions_window.winfo_exists():
+            self.parent.past_sessions_window.refresh()
+        if hasattr(self.parent, "set_status"):
+            self.parent.set_status(status_message)
+
+    def _on_search_change(self, *_):
+        self._filter_all()
+
+    def _filter_all(self):
+        terms = {field: self._clean_value(var.get()).lower() for field, var in self.search_vars.items()}
+        if not any(terms.values()):
+            for iid in self._all_iids:
+                if self.tree.exists(iid):
+                    self.tree.reattach(iid, '', 'end')
+            return
+        for iid in self._all_iids:
+            if not self.tree.exists(iid):
+                continue
+            match = True
+            for field, term in terms.items():
+                if term and term not in self._clean_value(self.tree.set(iid, field)).lower():
+                    match = False
+                    break
+            if match:
+                self.tree.reattach(iid, '', 'end')
+            else:
+                self.tree.detach(iid)
 
     def _on_scan(self):
-        code = self.scan_entry.get().strip()
+        if self.read_only:
+            return
+        code = self._clean_value(self.scan_entry.get())
         self.scan_entry.delete(0, "end")
-        # Pad to 8 digits only if numeric
-        if code.isdigit():
-            code = code.zfill(8)
         if not code:
             return
+        if code.isdigit():
+            code = code.zfill(8)
+        self._hide_gate_panel()
         if not self.tree.exists(code):
-            # Show not found popup
             resp = messagebox.askquestion(
                 "Not found",
                 f"Card ID '{code}' not found.\nDo you want to add this student?",
                 icon="warning", type="yesno", default="no", parent=self
             )
             if resp == "yes":
-                self._add_student_with_cardid(code)
-            # else: just return to scanning
+                self._launch_add_student_dialog(card_id=code, default_notes="Diff group")
             return
-        self._visible_iids = list(self._all_iids)
+        self.tree.selection_set(code)
+        self.tree.focus(code)
+        self._visible_iids = [iid for iid in self._all_iids if self.tree.exists(iid)]
         for iid in self._all_iids:
-            if iid != code: self.tree.detach(iid)
-        self.pb.start(10)
-        self.after(2000, lambda: self._finish_scan(code))
+            if iid != code and self.tree.exists(iid):
+                self.tree.detach(iid)
+        self.pb.start()
+        self.after(500, lambda: self._finish_scan(code))
 
-    def _add_student_with_cardid(self, card_id):
-        card_id = card_id.zfill(8)
-        dlg = tk.Toplevel(self)
-        dlg.title("Add Student")
-        width, height = 320, 200
-        dlg.geometry(f"{width}x{height}")
-        bg_img = self.original_bg.resize((width, height), Image.LANCZOS)
-        bg     = ImageTk.PhotoImage(bg_img)
-        lbl    = tk.Label(dlg, image=bg); lbl.place(relwidth=1, relheight=1)
-        dlg.bg_photo = bg
+    def _restore_visible_rows(self):
+        if not self._visible_iids:
+            return
+        for iid in self._visible_iids:
+            if self.tree.exists(iid):
+                self.tree.reattach(iid, '', 'end')
+        self._visible_iids = []
 
-        # Show Card ID (read-only)
-        ttk.Label(dlg, text="Card ID").place(x=10, y=10)
-        cid_lbl = ttk.Label(dlg, text=card_id)
-        cid_lbl.place(x=100, y=10)
-
-        inputs = {}
-        for i, lab in enumerate(("Student ID","Name","Phone")):
-            y = 50 + 40 * i
-            ttk.Label(dlg, text=lab).place(x=10, y=y)
-            ent = ttk.Entry(dlg); ent.place(x=100, y=y, width=200)
-            inputs[lab.lower().replace(" ", "_")] = ent
-
-        def confirm():
-            vals = {k: e.get().strip() for k,e in inputs.items()}
-            if not (vals["student_id"] and vals["name"] and vals["phone"]):
-                return messagebox.showerror("Missing", "Fill all fields", parent=dlg)
-            id_exists, phone_exists = self._student_id_or_phone_exists(vals["student_id"], vals["phone"])
-            if id_exists or phone_exists:
-                if id_exists and phone_exists:
-                    msg = "This ID & phone no. already exists"
-                elif id_exists:
-                    msg = "This ID already exists"
-                else:
-                    msg = "This phone no. already exists"
-                messagebox.showwarning("Duplicate", msg, parent=dlg)
-                return  # Do not close the dialog
-            rec = {
-                "card_id":    card_id,
-                "student_id": vals["student_id"],
-                "name":       vals["name"],
-                "phone":      vals["phone"],
-                "attendance": "attend",
-                "notes":      "Diff group",  # notes only
-                "timestamp":  datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-            }
-            if self.restrictions.get("exam"):
-                rec["exam"] = ""
-            if self.restrictions.get("homework"):
-                rec["homework"] = ""
-            self.sm.add_record(rec)
-            vals_list = [
-                rec["card_id"], rec["student_id"],
-                rec["name"], rec["phone"]
-            ]
-            if self.restrictions.get("exam"):     vals_list.append(rec["exam"])
-            if self.restrictions.get("homework"): vals_list.append(rec["homework"])
-            vals_list += [rec["attendance"], rec["notes"], rec["timestamp"]]
-            self.tree.insert("", "end", iid=card_id, values=tuple(vals_list))
-            self._all_iids.append(card_id)
-            self._update_row(card_id, "attend", rec["notes"])
-            dlg.destroy()
-
-        ttk.Button(dlg, text="Confirm", command=confirm).place(x=60, y=height-30, width=80)
-        ttk.Button(dlg, text="Cancel",  command=dlg.destroy).place(x=180, y=height-30, width=80)
+    def _get_missing_fields(self, code):
+        missing = []
+        if self.restrictions.get("exam"):
+            if not self._clean_value(self.tree.set(code, "exam")):
+                missing.append("exam")
+        if self.restrictions.get("homework"):
+            if not self._clean_value(self.tree.set(code, "homework")):
+                missing.append("homework")
+        return missing
 
     def _finish_scan(self, code):
         self.pb.stop()
-        for iid in self._visible_iids:
-            self.tree.reattach(iid, '', 'end')
-        # Only mark attendance if not already attended
-        already_attended = False
-        for r in self.sm.records:
-            if str(r["card_id"]) == code and r.get("attendance", "") == "attend":
-                already_attended = True
-                break
-
-        # --- Check restrictions before marking attendance ---
-        missing = []
-        if self.restrictions.get("exam") and not self.tree.set(code, "exam").strip():
-            missing.append("exam")
-        if self.restrictions.get("homework") and not self.tree.set(code, "homework").strip():
-            missing.append("homework")
-
-        if missing:
-            self._open_gate_dialog(code, missing)
+        self._restore_visible_rows()
+        if not self.tree.exists(code):
             return
-
-        if not already_attended:
-            self._mark_attendance(code)
-            self._update_row(code, "attend", "")
-
-    def _on_row_double_click(self, event):
-        sel = self.tree.selection()
-        if not sel: return
-        cid = sel[0]
-
-        missing = []
-        if self.restrictions.get("exam") and not self.tree.set(cid, "exam").strip():
-            missing.append("exam")
-        if self.restrictions.get("homework") and not self.tree.set(cid, "homework").strip():
-            missing.append("homework")
-
+        missing = self._get_missing_fields(code)
         if missing:
-            self._open_gate_dialog(cid, missing)
+            self._show_gate_panel(code, missing)
             return
+        current_att = self._clean_value(self.tree.set(code, "attendance")).lower()
+        if current_att == "attend":
+            self.scan_entry.focus_set()
+            return
+        notes = self._clean_value(self.tree.set(code, "notes"))
+        self._set_attendance(code, "attend", notes, warn_on_duplicate=False)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
 
-        name = self.tree.set(cid, "name")
-        if messagebox.askyesno("Confirm Attendance",
-                               f"Mark {name} as attended?",
-                               parent=self):
-            self._mark_attendance(cid)
-        else:
-            # Only allow cancel if currently attended
-            if self.tree.set(cid, "attendance") == "attend":
-                self._cancel_attendance(cid)
-            else:
-                # Just close the popup, do nothing
-                return
+    def _format_missing_text(self, missing):
+        labels = []
+        if "exam" in missing:
+            labels.append("exam")
+        if "homework" in missing:
+            labels.append("homework")
+        if len(labels) == 2:
+            return "exam and homework"
+        return labels[0]
 
-    def _open_gate_dialog(self, cid, missing):
-        if len(missing) == 2:
-            msg = "This student didn't take the exam and didn't turn in the H.W."
-        else:
-            msg = ("This student didn't take the exam."
-                   if missing[0] == "exam"
-                   else "This student didn't turn in the H.W.")
-        dlg = tk.Toplevel(self)
-        dlg.title("Gate Restriction")
-        dlg.transient(self); dlg.grab_set()
+    def _show_gate_panel(self, cid, missing):
+        if self.read_only:
+            return
+        name = self._clean_value(self.tree.set(cid, "name")) or cid
+        detail = self._format_missing_text(missing)
+        self.gate_message_var.set(f"Gate restriction: {name} is missing {detail}.")
+        self._gate_context = {"cid": cid, "missing": missing}
+        if not self.gate_panel.winfo_ismapped():
+            self.gate_panel.pack(fill="x", padx=12, pady=(0, 10))
+        self.tree.selection_set(cid)
+        self.tree.focus(cid)
+        self.scan_entry.focus_set()
 
-        tk.Label(dlg, text=msg, wraplength=300).pack(pady=10, padx=10)
-        btn_frame = tk.Frame(dlg); btn_frame.pack(pady=5)
-        tk.Button(btn_frame, text="Cancel",
-                  command=lambda: self._on_gate_cancel(cid, dlg)
-        ).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Attend",
-                  command=lambda: self._on_gate_attend(cid, missing, dlg)
-        ).pack(side="left", padx=5)
+    def _hide_gate_panel(self):
+        self._gate_context = None
+        if self.gate_panel.winfo_ismapped():
+            self.gate_panel.pack_forget()
 
-    def _on_gate_cancel(self, cid, dlg):
+    def _gate_cancel(self):
+        if self.read_only or not self._gate_context:
+            return
+        cid = self._gate_context["cid"]
         note = f"[{datetime.now():%H:%M:%S}] canceled"
-        self.sm.add_record({
-            "card_id": cid, "student_id": "", "name": "",
-            "phone": "", "attendance": "", "notes": note
-        })
-        self._update_row(cid, "", note)
-        dlg.destroy()
+        self._cancellations += 1
+        self._set_attendance(cid, "", note, warn_on_duplicate=False, append=True)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
 
-    def _on_gate_attend(self, cid, missing, dlg):
-        # Check if already attended
-        if self.tree.set(cid, "attendance") == "attend":
-            messagebox.showwarning("Already Attended", "This student is already attended.", parent=self)
-            dlg.destroy()
+    def _gate_attend(self):
+        if self.read_only or not self._gate_context:
             return
-        # Otherwise, mark attendance and show missing note dialog
-        self._mark_attendance(cid)
-        dlg.destroy()
-        self._open_missing_note_dialog(cid, missing)
+        cid = self._gate_context["cid"]
+        missing = self._gate_context["missing"]
+        base_note = self._clean_value(self.tree.set(cid, "notes"))
+        missing_note = self._build_missing_note(missing)
+        combined = base_note
+        if missing_note:
+            combined = f"{base_note} {missing_note}".strip()
+        self._set_attendance(cid, "attend", combined, warn_on_duplicate=False)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
 
-    def _open_missing_note_dialog(self, cid, missing):
+    def _build_missing_note(self, missing):
+        if not missing:
+            return ""
         if len(missing) == 2:
-            btn_text = "No exam & H.W."
+            return "[No exam & H.W.]"
+        return "[No exam]" if missing[0] == "exam" else "[No H.W.]"
+
+    def _set_attendance(self, code, attendance, notes, *, warn_on_duplicate=True, append=False):
+        if self.read_only:
+            return False
+        if not self.tree.exists(code):
+            return False
+        current_att = self._clean_value(self.tree.set(code, "attendance")).lower()
+        if warn_on_duplicate and attendance.lower() == "attend" and current_att == "attend":
+            messagebox.showwarning("Already Attended", "This student is already attended.", parent=self)
+            return False
+        current_notes = self._clean_value(self.tree.set(code, "notes"))
+        if append and notes:
+            final_notes = f"{current_notes} {notes}".strip()
+        elif notes != "":
+            final_notes = notes.strip()
         else:
-            btn_text = "No exam" if missing[0] == "exam" else "No H.W."
-
-        sub = tk.Toplevel(self)
-        sub.title("Add Missing Note")
-        sub.transient(self); sub.grab_set()
-
-        tk.Label(sub, text="Append a missing-field note?", wraplength=250).pack(pady=10)
-        frame = tk.Frame(sub); frame.pack(pady=5)
-        tk.Button(frame, text=btn_text,
-                  command=lambda: self._append_missing_note(cid, btn_text, sub)
-        ).pack(side="left", padx=5)
-        tk.Button(frame, text="Finished Session",
-                  command=sub.destroy
-        ).pack(side="left", padx=5)
-
-    def _append_missing_note(self, cid, text, sub):
-        current = self.tree.set(cid, "notes")
-        new_note = f"{current} [{text}]"
-        # Always update the session file
-        rec = {
-            "card_id": cid,
-            "student_id": self.tree.set(cid, "student_id"),
-            "name": self.tree.set(cid, "name"),
-            "phone": self.tree.set(cid, "phone"),
-            "attendance": "attend",
-            "notes": new_note,
-            "timestamp": datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-        }
-        if self.restrictions.get("exam"):
-            rec["exam"] = self.tree.set(cid, "exam")
-        if self.restrictions.get("homework"):
-            rec["homework"] = self.tree.set(cid, "homework")
+            final_notes = current_notes
+        timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+        rec = self._build_record_payload(code, attendance, final_notes, timestamp)
         self.sm.add_record(rec)
-        self._update_row(cid, "attend", new_note)
-        sub.destroy()
+        self._update_record_cache(rec)
+        self._update_row(code, attendance, final_notes, timestamp)
+        self._refresh_stats()
+        return True
 
-    def _mark_attendance(self, code):
-        card_col = self.mapping.get("card_id", "card_id")
-        att_col = self.mapping.get("attendance", "attendance")
-        df = read_data(self.sm.session_path)
-        mask = df[card_col].astype(str) == code
-        if mask.any():
-            # If already attended, warn and return
-            if (df.loc[mask, att_col] == "attend").any():
-                messagebox.showwarning("Already Attended", "This student is already attended.", parent=self)
+    def _build_record_payload(self, code, attendance, notes, timestamp):
+        rec = {
+            "card_id": code,
+            "student_id": self._clean_value(self.tree.set(code, "student_id")),
+            "name": self._clean_value(self.tree.set(code, "name")),
+            "phone": self._clean_value(self.tree.set(code, "phone")),
+            "attendance": attendance,
+            "notes": notes,
+            "timestamp": timestamp,
+        }
+        if self.restrictions.get("exam") and "exam" in self.tree["columns"]:
+            rec["exam"] = self._clean_value(self.tree.set(code, "exam"))
+        if self.restrictions.get("homework") and "homework" in self.tree["columns"]:
+            rec["homework"] = self._clean_value(self.tree.set(code, "homework"))
+        return rec
+
+    def _update_record_cache(self, rec):
+        cid = str(rec.get("card_id", ""))
+        for existing in self.sm.records:
+            if str(existing.get("card_id", "")) == cid:
+                existing.update(rec)
                 return
-            # Otherwise, mark as attended
-            idx = df.index[mask][0]
-            df.at[idx, att_col] = "attend"
-            df.at[idx, self.mapping.get("timestamp", "timestamp")] = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-            write_data(df, self.sm.session_path)
-        else:
-            # Student not found in file, create new record from tree
-            if self.tree.exists(code):
-                rec = {
-                    "card_id": code,
-                    "student_id": self.tree.set(code, "student_id"),
-                    "name": self.tree.set(code, "name"),
-                    "phone": self.tree.set(code, "phone"),
-                    "attendance": "attend",
-                    "notes": "",
-                    "timestamp": datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-                }
-                if self.restrictions.get("exam"):
-                    rec["exam"] = self.tree.set(code, "exam")
-                if self.restrictions.get("homework"):
-                    rec["homework"] = self.tree.set(code, "homework")
-                self.sm.add_record(rec)
-        self._update_row(code, "attend", "")
+        self.sm.records.append(dict(rec))
+
+    def _update_row(self, code, attendance, notes, timestamp=None):
+        if not self.tree.exists(code):
+            return
+        cols = list(self.tree["columns"])
+        values = list(self.tree.item(code, "values"))
+        try:
+            att_idx = cols.index("attendance")
+            notes_idx = cols.index("notes")
+            ts_idx = cols.index("timestamp")
+        except ValueError:
+            return
+        values[att_idx] = self._clean_value(attendance)
+        values[notes_idx] = self._clean_value(notes)
+        if timestamp is None:
+            df = read_data(self.sm.session_path)
+            card_col = self.mapping.get("card_id", "card_id")
+            ts_col = self.mapping.get("timestamp", "timestamp")
+            mask = df[card_col].astype(str) == str(code)
+            if mask.any() and ts_col in df.columns:
+                timestamp = self._clean_value(df.loc[mask, ts_col].values[0])
+            else:
+                timestamp = ""
+        values[ts_idx] = self._clean_value(timestamp)
+        self.tree.item(code, values=tuple(values))
+
+    def _on_row_double_click(self, _event):
+        if self.read_only:
+            return
+        sel = self.tree.selection()
+        if not sel:
+            return
+        cid = sel[0]
+        missing = self._get_missing_fields(cid)
+        if missing:
+            self._show_gate_panel(cid, missing)
+            return
+        name = self._clean_value(self.tree.set(cid, "name")) or "this student"
+        if messagebox.askyesno("Confirm Attendance", f"Mark {name} as attended?", parent=self):
+            notes = self._clean_value(self.tree.set(cid, "notes"))
+            self._set_attendance(cid, "attend", notes, warn_on_duplicate=True)
+        elif self._clean_value(self.tree.set(cid, "attendance")).lower() == "attend":
+            self._cancel_attendance(cid)
+        self.scan_entry.focus_set()
 
     def _cancel_attendance(self, code):
-        canceled_note = f"[{datetime.now():%H:%M:%S}] canceled"
-        found = False
-        for r in self.sm.records:
-            if str(r["card_id"]) == code:
-                r["attendance"] = ""
-                # Clean old notes to avoid 'nan'
-                old_notes = r.get("notes", "")
-                if old_notes is None or str(old_notes).strip().lower() == "nan":
-                    r["notes"] = canceled_note
-                else:
-                    r["notes"] = f"{old_notes} {canceled_note}"
-                found = True
-                break
-        if not found:
+        if self.read_only:
             return
-
-        # Update only attendance and notes in the file, keep timestamp as is
-        df = read_data(self.sm.session_path)
-        card_col = self.mapping.get("card_id", "card_id")
-        att_col = self.mapping.get("attendance", "attendance")
-        notes_col = self.mapping.get("notes", "notes")
-        mask = df[card_col].astype(str) == str(code)
-        if mask.any():
-            df.loc[mask, att_col] = ""
-            # Clean old notes to avoid 'nan'
-            old_notes = df.loc[mask, notes_col].astype(str).fillna("")
-            def clean_note(val):
-                return "" if val.strip().lower() == "nan" else val
-            cleaned_notes = old_notes.apply(clean_note)
-            df.loc[mask, notes_col] = cleaned_notes + " " + canceled_note
-            df.loc[mask, notes_col] = df.loc[mask, notes_col].str.strip()
-            write_data(df, self.sm.session_path)
-
-        self._update_row(code, "", r["notes"])
-
-    def _update_row(self, code, attendance, notes):
-        def clean(val):
-            if val is None:
-                return ""
-            if isinstance(val, float) and pd.isna(val):
-                return ""
-            if isinstance(val, str) and val.strip().lower() == "nan":
-                return ""
-            return str(val)
-
-        if not self.tree.exists(code): return
-        vals = list(self.tree.item(code, "values"))
-        # Get the timestamp from the session file (self.sm.session_path)
-        df = read_data(self.sm.session_path)
-        timestamp_col = self.mapping.get("timestamp", "timestamp")
-        card_col = self.mapping.get("card_id", "card_id")
-        mask = df[card_col].astype(str) == str(code)
-        if mask.any() and timestamp_col in df.columns:
-            timestamp = df.loc[mask, timestamp_col].values[0]
-        else:
-            timestamp = ""
-        vals[-3], vals[-2], vals[-1] = clean(attendance), clean(notes), clean(timestamp)
-        self.tree.item(code, values=vals)
+        note = f"[{datetime.now():%H:%M:%S}] canceled"
+        self._cancellations += 1
+        self._set_attendance(code, "", note, warn_on_duplicate=False, append=True)
 
     def _on_add_student_flow(self):
-        if not hasattr(self, "_unknown_counter"):
-            # Find the highest Unknown N already used
-            unknowns = [
-                int(str(r["card_id"]).split("Unknown ")[1])
-                for r in self.sm.records
-                if str(r["card_id"]).startswith("Unknown ")
-                   and str(r["card_id"]).split("Unknown ")[1].isdigit()
-            ]
-            self._unknown_counter = max(unknowns, default=0)
-        dlg = tk.Toplevel(self)
+        self._launch_add_student_dialog()
+
+    def _launch_add_student_dialog(self, card_id=None, default_notes="manual addition"):
+        if self.read_only:
+            return
+        if card_id and card_id.isdigit():
+            card_id = card_id.zfill(8)
+        dlg = CTkToplevel(self)
         dlg.title("Add Student")
-        width, height = 320, 160
+        width = 360
+        height = 220 if card_id else 190
         dlg.geometry(f"{width}x{height}")
+        dlg.transient(self)
+        dlg.grab_set()
         bg_img = self.original_bg.resize((width, height), Image.LANCZOS)
-        bg     = ImageTk.PhotoImage(bg_img)
-        lbl    = tk.Label(dlg, image=bg); lbl.place(relwidth=1, relheight=1)
+        bg = ImageTk.PhotoImage(bg_img)
+        background = CTkLabel(dlg, text="", image=bg)
+        background.place(relwidth=1, relheight=1)
         dlg.bg_photo = bg
 
         inputs = {}
-        for i, lab in enumerate(("Student ID","Name","Phone")):
-            y = 10 + 40 * i
-            ttk.Label(dlg, text=lab).place(x=10, y=y)
-            ent = ttk.Entry(dlg); ent.place(x=100, y=y, width=200)
-            inputs[lab.lower().replace(" ", "_")] = ent
+        y_offset = 16
+        if card_id:
+            CTkLabel(dlg, text="Card ID").place(x=16, y=y_offset)
+            CTkLabel(dlg, text=card_id).place(x=140, y=y_offset)
+            y_offset += 40
+
+        fields = [("student_id", "Student ID"), ("name", "Name"), ("phone", "Phone")]
+        for index, (field, label) in enumerate(fields):
+            y = y_offset + index * 40
+            CTkLabel(dlg, text=label).place(x=16, y=y)
+            entry = CTkEntry(dlg)
+            entry.place(x=140, y=y, width=200)
+            inputs[field] = entry
 
         def confirm():
-            vals = {k: e.get().strip() for k,e in inputs.items()}
-            if not (vals["student_id"] and vals["name"] and vals["phone"]):
-                return messagebox.showerror("Missing", "Fill all fields", parent=dlg)
-            id_exists, phone_exists = self._student_id_or_phone_exists(vals["student_id"], vals["phone"])
+            values = {key: inputs[key].get().strip() for key in inputs}
+            if not all(values.values()):
+                messagebox.showerror("Missing", "Fill all fields", parent=dlg)
+                return
+            id_exists, phone_exists = self._student_id_or_phone_exists(values["student_id"], values["phone"])
             if id_exists or phone_exists:
                 if id_exists and phone_exists:
-                    msg = "This ID & phone no. already exists"
+                    msg = "This student ID and phone number already exist."
                 elif id_exists:
-                    msg = "This ID already exists"
+                    msg = "This student ID already exists."
                 else:
-                    msg = "This phone no. already exists"
+                    msg = "This phone number already exists."
                 messagebox.showwarning("Duplicate", msg, parent=dlg)
-                return  # Do not close the dialog
-            self._unknown_counter += 1
-            cid = f"Unknown {self._unknown_counter}"
+                return
+            cid = card_id
+            if not cid:
+                if not hasattr(self, "_unknown_counter"):
+                    unknowns = [
+                        int(str(r["card_id"]).split("Unknown ")[1])
+                        for r in self.sm.records
+                        if str(r.get("card_id", "")).startswith("Unknown ")
+                        and str(r["card_id"]).split("Unknown ")[1].isdigit()
+                    ]
+                    self._unknown_counter = max(unknowns, default=0)
+                self._unknown_counter += 1
+                cid = f"Unknown {self._unknown_counter}"
+            timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
             rec = {
-                "card_id":    cid,
-                "student_id": vals["student_id"],
-                "name":       vals["name"],
-                "phone":      vals["phone"],
+                "card_id": cid,
+                "student_id": values["student_id"],
+                "name": values["name"],
+                "phone": values["phone"],
                 "attendance": "attend",
-                "notes":      "manual addition",  # notes only
-                "timestamp":  datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+                "notes": default_notes,
+                "timestamp": timestamp,
             }
             if self.restrictions.get("exam"):
                 rec["exam"] = ""
             if self.restrictions.get("homework"):
                 rec["homework"] = ""
             self.sm.add_record(rec)
-            vals_list = [
-                rec["card_id"], rec["student_id"],
-                rec["name"], rec["phone"]
+            self._manual_additions += 1
+            self._update_record_cache(rec)
+            row_values = [
+                rec["card_id"],
+                rec["student_id"],
+                rec["name"],
+                rec["phone"],
             ]
-            if self.restrictions.get("exam"):     vals_list.append(rec["exam"])
-            if self.restrictions.get("homework"): vals_list.append(rec["homework"])
-            vals_list += [rec["attendance"], rec["notes"], rec["timestamp"]]  # <-- add timestamp here
-            self.tree.insert("", "end", iid=cid, values=tuple(vals_list))
-            self._all_iids.append(cid)
-            self._update_row(cid, "attend", rec["notes"])
+            if self.restrictions.get("exam"):
+                row_values.append(rec.get("exam", ""))
+            if self.restrictions.get("homework"):
+                row_values.append(rec.get("homework", ""))
+            row_values.extend([rec["attendance"], rec["notes"], rec["timestamp"]])
+            if self.tree.exists(cid):
+                self.tree.item(cid, values=tuple(row_values))
+            else:
+                self.tree.insert("", "end", iid=cid, values=tuple(row_values))
+                if cid not in self._all_iids:
+                    self._all_iids.append(cid)
+            self._update_row(cid, rec["attendance"], rec["notes"], rec["timestamp"])
+            self._refresh_stats()
             dlg.destroy()
+            self.scan_entry.focus_set()
 
-        ttk.Button(dlg, text="Confirm", command=confirm).place(x=60, y=height-30, width=80)
-        ttk.Button(dlg, text="Cancel",  command=dlg.destroy).place(x=180, y=height-30, width=80)
+        CTkButton(dlg, text="Confirm", command=confirm).place(x=80, y=height - 40, width=90)
+        CTkButton(dlg, text="Cancel", command=lambda: (dlg.destroy(), self.scan_entry.focus_set())).place(x=200, y=height - 40, width=90)
+        dlg.after(100, inputs["student_id"].focus_set)
 
     def _on_end_scan(self):
-        self.destroy()
+        if getattr(self, "read_only", False):
+            self._finalize_and_close(status_message=f"Session '{self.sm.name}' closed (view-only).")
+            return
+        if self._summary_dialog and self._summary_dialog.winfo_exists():
+            self._summary_dialog.lift()
+            self._summary_dialog.focus_force()
+            return
+        summary = self._collect_session_summary()
+        self._summary_dialog = SessionSummaryDialog(
+            self,
+            self.sm.name,
+            summary,
+            self.sm.session_path,
+            callback=self._handle_summary_result
+        )
 
-    def _global_focus_in(self, event):
+    def _global_focus_in(self, _event):
+        if self.read_only:
+            return
         widget = self.focus_get()
-        # Allow focus if it's on scan_entry or a search entry
+        if widget is None:
+            return
         if widget == self.scan_entry or widget in self._search_entries:
             return
-        # Allow focus if a dialog (Toplevel) is open and has focus
+        parent = getattr(widget, "master", None)
+        while parent is not None:
+            if parent == self.gate_panel:
+                return
+            parent = getattr(parent, "master", None)
         for w in self.winfo_children():
-            if isinstance(w, tk.Toplevel):
-                # If the widget is a child of the dialog, don't steal focus
-                if widget is not None and (widget == w or widget.winfo_toplevel() == w):
+            if isinstance(w, CTkToplevel):
+                if widget == w or widget.winfo_toplevel() == w:
                     return
-        # Otherwise, force focus back to scan_entry
         self.after_idle(self.scan_entry.focus_set)
 
     def _student_id_or_phone_exists(self, student_id, phone):
-        # Always check the session file for up-to-date records
         df = read_data(self.sm.session_path)
         sid_col = self.mapping.get("student_id", "student_id")
         phone_col = self.mapping.get("phone", "phone")
         id_exists = phone_exists = False
-
         if sid_col in df.columns:
             if student_id in df[sid_col].astype(str).values:
                 id_exists = True
         if phone_col in df.columns:
             if phone in df[phone_col].astype(str).values:
                 phone_exists = True
-
         return id_exists, phone_exists
-
 if __name__ == "__main__":
     app = App()
     app.mainloop()
+
+
+
+
+

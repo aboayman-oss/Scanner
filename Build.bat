@@ -1,17 +1,24 @@
 @echo off
-REM — Clean previous builds
-if exist "Session scanner.exe" del /q "Session scanner.exe"
-if exist "Session scanner.spec" del /q "Session scanner.spec"
+setlocal
+
+REM Clean previous PyInstaller outputs
+if exist dist rmdir /s /q dist
 if exist build rmdir /s /q build
 
-REM — Run PyInstaller, output EXE directly to the base folder
-pyinstaller --noconfirm --onefile --windowed ^
-  --name "Session scanner" ^
-  --icon "assets\thumbnail.ico" ^
-  --add-data "assets;assets" ^
-  --distpath . ^
-  src\main.py
+REM --noconfirm: overwrite existing artifacts without prompting
+REM --onefile: bundle everything into a single executable
+REM --add-data: embed the assets directory inside the bundle
+REM --hidden-import: ensure openpyxl is available when packaging Excel support
+pyinstaller --noconfirm --onefile ^
+    --add-data "assets;assets" ^
+    --hidden-import openpyxl ^
+    src\main.py
+
+if errorlevel 1 (
+    echo PyInstaller build failed.
+    exit /b %errorlevel%
+)
 
 echo.
-echo Build complete! Your EXE is: Session scanner.exe
+echo Build complete! Check the dist folder for the executable.
 pause
