@@ -290,27 +290,12 @@ class App(CTk):
     def _load_last_data(self):
         self.data_df = None  # Always reset on startup
         self._hide_data_status_panel()
-        if not os.path.exists(LAST_DATA_FILE):
-            self.set_status("Ready.")
-            return
-        try:
-            with open(LAST_DATA_FILE) as f:
-                info = json.load(f)
-        except Exception:
-            self.set_status("Ready.")
-            return
-        path = info.get("path")
-        if not path or not os.path.exists(path):
-            self.set_status("Ready.")
-            return
-        try:
-            df = read_data(path)
-        except Exception:
-            self.set_status("Ready.")
-            return
-        self.data_df = df
-        self._update_data_status_panel(path, len(df))
-        self.set_status(f"Restored {len(df)} records from {os.path.basename(path)}.")
+        if os.path.exists(LAST_DATA_FILE):
+            try:
+                os.remove(LAST_DATA_FILE)
+            except OSError:
+                pass
+        self.set_status("Ready.")
 
     def open_settings(self):
         # Only open one settings window at a time
@@ -425,3 +410,5 @@ class App(CTk):
             self.set_status(f"Session '{name}' created.")
         else:
             self.set_status(f"Session '{name}' ready.")
+
+
