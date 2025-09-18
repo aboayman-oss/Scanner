@@ -1,0 +1,738 @@
+class App(CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("RFID Attendance Manager")
+        self.column_map = {}
+        self.data_df    = None
+        self.settings_window = None  # <-- Track settings window
+        self.data_panel = None
+        self.data_rows_var = ctk.StringVar(value="")
+        self.data_path_var = ctk.StringVar(value="")
+        self.current_data_path = None
+        self._session_setup = None
+        self.past_sessions_window = None
+        self.summary_window = None
+
+        if os.path.exists(MAPPING_FILE):
+            with open(MAPPING_FILE) as f:
+                self.column_map = json.load(f)
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE) as f:
+                SETTINGS.update(json.load(f))
+
+        self._build_ui()
+        width, height = ensure_initial_size(self, min_size=MIN_DASHBOARD_SIZE)
+        self.minsize(width, height)
+        self._load_last_data()
+
+    def _build_ui(self):
+        """Compose the three-column layout for scanning, listing, and focus view."""
+        top_bar = CTkFrame(self, fg_color="transparent")
+        top_bar.pack(fill="x", padx=12, pady=(16, 8))
+        top_bar.grid_columnconfigure(0, weight=1)
+
+        session_text = f"Session: {self.sm.name}"
+        if self.read_only:
+            session_text += " (read-only)"
+        session_label = CTkLabel(top_bar, text=session_text, font=("Arial", 12))
+        session_label.grid(row=0, column=0, sticky="w")
+
+        self.end_button = CTkButton(top_bar, text="End Session", command=self._on_end_scan)
+        self.end_button.grid(row=0, column=1, sticky="e", padx=(18, 0))
+        if self.read_only:
+            self.end_button.configure(text="Close")
+
+        # Quick stats stay docked under the header before the main layout splits up.
+        self._build_stats_strip()
+
+        # Main content uses three columns: scan entry (left), student list (center), focus view (right).
+        body = CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        body.grid_columnconfigure(0, weight=0)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_columnconfigure(2, weight=0)
+        body.grid_rowconfigure(0, weight=1)
+
+        # Left column: capture scans and show progress.
+        self.scan_section = CTkFrame(body, fg_color=("#f8fafc", "#111821"), corner_radius=12, width=280)
+        self.scan_section.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self.scan_section.grid_propagate(False)
+        CTkLabel(self.scan_section, text="Scan Entry", font=("Arial", 12, "bold")).pack(anchor="w", padx=16, pady=(16, 6))
+        self.scan_entry = CTkEntry(self.scan_section, width=240, placeholder_text="Scan card ID")
+        self.scan_entry.pack(anchor="w", padx=16)
+        self.scan_entry.bind("<Return>", lambda _e: self._on_scan())
+
+        self.pb = CTkProgressBar(self.scan_section, mode="indeterminate", width=240)
+        self.pb.pack(anchor="w", padx=16, pady=(10, 12))
+        self.pb.stop()
+
+        if self.read_only:
+            self.scan_entry.configure(state="disabled")
+            self.scan_entry.unbind("<Return>")
+            self.scan_section.grid_remove()
+
+        # Center column: primary student list controls and table.
+        list_section = CTkFrame(body, fg_color="transparent")
+        list_section.grid(row=0, column=1, sticky="nsew")
+        list_section.grid_columnconfigure(0, weight=1)
+
+        search_frame = CTkFrame(list_section, fg_color="transparent")
+        search_frame.pack(fill="x", pady=(16, 8))
+        search_frame.grid_columnconfigure(0, weight=1)
+        self.search_var = ctk.StringVar()
+        search_entry = CTkEntry(
+            search_frame,
+            textvariable=self.search_var,
+            placeholder_text="Search by card, ID, name, phone",
+        )
+        search_entry.grid(row=0, column=0, sticky="ew", padx=5)
+        self.search_var.trace_add("write", self._on_search_change)
+        self._search_entries.append(search_entry)
+        search_entry.bind("<FocusIn>", lambda _e: self._pause_focus_guard())
+        search_entry.bind("<FocusOut>", lambda _e: self._resume_focus_guard())
+        self.smart_search_entry = search_entry
+
+        self.gate_panel = CTkFrame(list_section, fg_color=("#e2e8f0", "#1f2933"), corner_radius=8)
+        self.gate_label = CTkLabel(
+            self.gate_panel,
+            textvariable=self.gate_message_var,
+            wraplength=760,
+            font=("Arial", 12)
+        )
+        self.gate_label.pack(pady=(10, 4), padx=12, anchor="w")
+        gate_buttons = CTkFrame(self.gate_panel, fg_color="transparent")
+        gate_buttons.pack(pady=(0, 10))
+        self.gate_cancel_btn = CTkButton(gate_buttons, text="Cancel", command=self._gate_cancel)
+        self.gate_cancel_btn.pack(side="left", padx=6)
+        self.gate_attend_btn = CTkButton(gate_buttons, text="Attend", command=self._gate_attend)
+        self.gate_attend_btn.pack(side="left", padx=6)
+        self.gate_panel.pack(fill="x", pady=(0, 10))
+        self.gate_panel.pack_forget()
+        if self.read_only:
+            self.gate_cancel_btn.configure(state="disabled")
+            self.gate_attend_btn.configure(state="disabled")
+
+        tree_container = CTkFrame(list_section, fg_color="transparent")
+        tree_container.pack(fill="both", expand=True)
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+
+        cols = ["card_id", "student_id", "name", "phone"]
+        if self.restrictions.get("exam"):
+            cols.append("exam")
+        if self.restrictions.get("homework"):
+            cols.append("homework")
+        cols += ["attendance", "notes", "timestamp"]
+
+        self.tree = ttk.Treeview(tree_container, columns=cols, show="headings", selectmode="browse")
+        for col in cols:
+            self.tree.heading(col, text=col.replace("_", " ").title())
+            self.tree.column(col, anchor="center", width=110)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.bind("<Double-1>", self._on_row_double_click)
+        if self.read_only:
+            self.tree.unbind("<Double-1>")
+
+        self.control_frame = CTkFrame(list_section, fg_color="transparent")
+        self.control_frame.pack(fill="x", pady=(10, 0))
+        self.add_student_button = CTkButton(self.control_frame, text="Add Student", command=self._on_add_student_flow)
+        self.add_student_button.pack(side="left")
+        if self.read_only:
+            self.control_frame.pack_forget()
+
+        # Right column: interactive focus view stays hidden until a scan populates it.
+        self.focus_view_container = CTkFrame(body, fg_color=("#f1f5f9", "#12263a"), corner_radius=12, width=320)
+        self.focus_view_container.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        self.focus_view_container.grid_columnconfigure(0, weight=1)
+        CTkLabel(self.focus_view_container, text="Interactive Focus View", font=("Arial", 12, "bold")).pack(anchor="w", padx=16, pady=(16, 6))
+        self.focus_student_label = CTkLabel(self.focus_view_container, text="Awaiting scan", font=("Arial", 16, "bold"))
+        self.focus_student_label.pack(anchor="w", padx=16)
+        self.focus_status_label = CTkLabel(self.focus_view_container, text="", font=("Arial", 12))
+        self.focus_status_label.pack(anchor="w", padx=16, pady=(4, 8))
+        self.focus_notes = CTkTextbox(self.focus_view_container, height=160)
+        self.focus_notes.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self.focus_actions_frame = CTkFrame(self.focus_view_container, fg_color="transparent")
+        self.focus_actions_frame.pack(fill="x", padx=16, pady=(0, 16))
+
+        self.focus_view_container.grid_remove()
+        self.focus_view_visible = False
+
+
+    def _build_stats_strip(self):
+        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=10)
+        self.stats_frame.pack(fill="x", padx=12, pady=(0, 10))
+        stats = [
+            ("Total Rows", self.stats_vars["total"]),
+            ("Attended", self.stats_vars["attended"]),
+            ("Attendance %", self.stats_vars["percent"]),
+        ]
+        if self.restrictions.get("exam"):
+            stats.append(("Missing Exam", self.stats_vars["missing_exam"]))
+        if self.restrictions.get("homework"):
+            stats.append(("Missing H.W.", self.stats_vars["missing_hw"]))
+        for idx, (label, var) in enumerate(stats):
+            block = CTkFrame(self.stats_frame, fg_color="transparent")
+            block.grid(row=0, column=idx, sticky="w", padx=(12 if idx == 0 else 8, 8), pady=10)
+            CTkLabel(block, text=label, font=("Arial", 11, "bold")).pack(anchor="w")
+            CTkLabel(block, textvariable=var, font=("Arial", 16)).pack(anchor="w")
+        for idx in range(len(stats)):
+            self.stats_frame.grid_columnconfigure(idx, weight=1)
+
+    def _apply_treeview_style(self):
+        mode = ctk.get_appearance_mode()
+        if mode == "Dark":
+            bg = "#1e1e1e"
+            fg = "#f2f2f2"
+            heading_bg = "#1f6aa5"
+            heading_fg = "#ffffff"
+        else:
+            bg = "#ffffff"
+            fg = "#1a1a1a"
+            heading_bg = "#e1efff"
+            heading_fg = "#1a1a1a"
+        select_bg = "#1f6aa5"
+        select_fg = "#ffffff"
+
+        style = ttk.Style(self)
+        style.configure(
+            "CTk.Treeview",
+            background=bg,
+            foreground=fg,
+            fieldbackground=bg,
+            rowheight=32,
+            font=("Arial", 11)
+        )
+        style.map(
+            "CTk.Treeview",
+            background=[("selected", select_bg)],
+            foreground=[("selected", select_fg)]
+        )
+        style.configure(
+            "CTk.Treeview.Heading",
+            background=heading_bg,
+            foreground=heading_fg,
+            font=("Arial", 11, "bold")
+        )
+        style.map(
+            "CTk.Treeview.Heading",
+            background=[("active", heading_bg)]
+        )
+        self.tree.configure(style="CTk.Treeview")
+
+    def _load_existing(self):
+        def pad_card_id(val):
+            val_str = str(val).strip()
+            if val_str.isdigit():
+                return val_str.zfill(8)
+            return val_str
+
+        cols = self.tree["columns"]
+        session_records = {pad_card_id(rec.get("card_id", "")): rec for rec in self.sm.records}
+        self._all_iids = []
+
+        for _, row in self.df.iterrows():
+            card_id_col = self.mapping.get("card_id", "card_id")
+            cid = pad_card_id(row.get(card_id_col, ""))
+            rec = session_records.pop(cid, None)
+            values = []
+            for col in cols:
+                mapped_col = self.mapping.get(col, col)
+                if rec is not None and col in rec:
+                    val = rec.get(col, "")
+                else:
+                    val = row.get(mapped_col, "")
+                values.append(self._clean_value(val))
+            self.tree.insert("", "end", iid=cid, values=tuple(values))
+            self._all_iids.append(cid)
+
+        for cid, rec in session_records.items():
+            values = [self._clean_value(rec.get(col, "")) for col in cols]
+            self.tree.insert("", "end", iid=cid, values=tuple(values))
+            self._all_iids.append(cid)
+
+        for iid in self._all_iids:
+            attendance = self._clean_value(self.tree.set(iid, "attendance"))
+            notes = self._clean_value(self.tree.set(iid, "notes"))
+            self._update_row(iid, attendance, notes)
+
+    def _clean_value(self, value):
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        text = str(value).strip()
+        if text.lower() == "nan":
+            return ""
+        return text
+
+    def _compute_summary_metrics(self):
+        total = len(self._all_iids)
+        attended = 0
+        missing_exam = 0
+        missing_hw = 0
+        for iid in self._all_iids:
+            if not self.tree.exists(iid):
+                continue
+            attendance = self._clean_value(self.tree.set(iid, "attendance")).lower()
+            if attendance == "attend":
+                attended += 1
+            if self.restrictions.get("exam"):
+                if not self._clean_value(self.tree.set(iid, "exam")):
+                    missing_exam += 1
+            if self.restrictions.get("homework"):
+                if not self._clean_value(self.tree.set(iid, "homework")):
+                    missing_hw += 1
+        percent_text = "0%"
+        if total:
+            percent_text = f"{(attended / total) * 100:.1f}%"
+        metrics = {
+            "total": total,
+            "attended": attended,
+            "attendance_rate": percent_text,
+        }
+        if self.restrictions.get("exam"):
+            metrics["missing_exam"] = missing_exam
+        if self.restrictions.get("homework"):
+            metrics["missing_hw"] = missing_hw
+        return metrics
+
+    def _build_summary_payload(self):
+        metrics = self._compute_summary_metrics()
+        summary = dict(metrics)
+        summary["manual_additions"] = self._manual_additions
+        summary["cancellations"] = self._cancellations
+        return summary
+
+    def _refresh_stats(self):
+        metrics = self._compute_summary_metrics()
+        self.stats_vars["total"].set(f"{metrics['total']}")
+        self.stats_vars["attended"].set(f"{metrics['attended']}")
+        self.stats_vars["percent"].set(metrics["attendance_rate"])
+        if self.restrictions.get("exam"):
+            self.stats_vars["missing_exam"].set(f"{metrics.get('missing_exam', 0)}")
+        if self.restrictions.get("homework"):
+            self.stats_vars["missing_hw"].set(f"{metrics.get('missing_hw', 0)}")
+
+    def _finalize_and_close(self, status_message=None):
+        if status_message is None:
+            status_message = f"Session '{self.sm.name}' saved and closed."
+        summary = self._build_summary_payload()
+        session_name = self.sm.name
+        session_path = getattr(self.sm, "session_path", None)
+        parent = self.parent
+        read_only = getattr(self, "read_only", False)
+        if self.winfo_exists():
+            self.destroy()
+        if hasattr(parent, "_refresh_recent_sessions"):
+            parent._refresh_recent_sessions()
+        if getattr(parent, "past_sessions_window", None) and parent.past_sessions_window.winfo_exists():
+            parent.past_sessions_window.refresh()
+        if hasattr(parent, "set_status"):
+            parent.set_status(status_message)
+        if hasattr(parent, "show_session_summary"):
+            try:
+                parent.after(160, lambda: parent.show_session_summary(
+                    session_name=session_name,
+                    summary=summary,
+                    session_path=session_path,
+                    read_only=read_only,
+                ))
+            except Exception:
+                pass
+
+    def _on_search_change(self, *_):
+        self._filter_all()
+
+    def _filter_all(self):
+        query = ''
+        if self.search_var is not None:
+            query = self._clean_value(self.search_var.get()).lower()
+        terms = [term for term in query.split() if term]
+        if not terms:
+            for iid in self._all_iids:
+                if self.tree.exists(iid):
+                    self.tree.reattach(iid, '', 'end')
+            return
+        columns = self.tree['columns']
+        for iid in self._all_iids:
+            if not self.tree.exists(iid):
+                continue
+            values = [
+                self._clean_value(self.tree.set(iid, col)).lower()
+                for col in columns
+            ]
+            values.append(str(iid).lower())
+            haystack = ' '.join(values)
+            if all(term in haystack for term in terms):
+                self.tree.reattach(iid, '', 'end')
+            else:
+                self.tree.detach(iid)
+
+    def _on_scan(self):
+        if self.read_only:
+            return
+        code = self._clean_value(self.scan_entry.get())
+        self.scan_entry.delete(0, "end")
+        if not code:
+            return
+        if code.isdigit():
+            code = code.zfill(8)
+        self._hide_gate_panel()
+        if not self.tree.exists(code):
+            resp = messagebox.askquestion(
+                "Not found",
+                f"Card ID '{code}' not found.\nDo you want to add this student?",
+                icon="warning", type="yesno", default="no", parent=self
+            )
+            if resp == "yes":
+                self._launch_add_student_dialog(card_id=code, default_notes="Diff group")
+            return
+        self.tree.selection_set(code)
+        self.tree.focus(code)
+        self._visible_iids = [iid for iid in self._all_iids if self.tree.exists(iid)]
+        for iid in self._all_iids:
+            if iid != code and self.tree.exists(iid):
+                self.tree.detach(iid)
+        self.pb.start()
+        self.after(500, lambda: self._finish_scan(code))
+
+    def _restore_visible_rows(self):
+        if not self._visible_iids:
+            return
+        for iid in self._visible_iids:
+            if self.tree.exists(iid):
+                self.tree.reattach(iid, '', 'end')
+        self._visible_iids = []
+
+    def _get_missing_fields(self, code):
+        missing = []
+        if self.restrictions.get("exam"):
+            if not self._clean_value(self.tree.set(code, "exam")):
+                missing.append("exam")
+        if self.restrictions.get("homework"):
+            if not self._clean_value(self.tree.set(code, "homework")):
+                missing.append("homework")
+        return missing
+
+    def _finish_scan(self, code):
+        self.pb.stop()
+        self._restore_visible_rows()
+        if not self.tree.exists(code):
+            return
+        missing = self._get_missing_fields(code)
+        if missing:
+            self._show_gate_panel(code, missing)
+            return
+        current_att = self._clean_value(self.tree.set(code, "attendance")).lower()
+        if current_att == "attend":
+            self.scan_entry.focus_set()
+            return
+        notes = self._clean_value(self.tree.set(code, "notes"))
+        self._set_attendance(code, "attend", notes, warn_on_duplicate=False)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
+
+    def _format_missing_text(self, missing):
+        labels = []
+        if "exam" in missing:
+            labels.append("exam")
+        if "homework" in missing:
+            labels.append("homework")
+        if len(labels) == 2:
+            return "exam and homework"
+        return labels[0]
+
+    def _show_gate_panel(self, cid, missing):
+        if self.read_only:
+            return
+        name = self._clean_value(self.tree.set(cid, "name")) or cid
+        detail = self._format_missing_text(missing)
+        self.gate_message_var.set(f"Gate restriction: {name} is missing {detail}.")
+        self._gate_context = {"cid": cid, "missing": missing}
+        if not self.gate_panel.winfo_ismapped():
+            self.gate_panel.pack(fill="x", padx=12, pady=(0, 10))
+        self.tree.selection_set(cid)
+        self.tree.focus(cid)
+        self.scan_entry.focus_set()
+
+    def _hide_gate_panel(self):
+        self._gate_context = None
+        if self.gate_panel.winfo_ismapped():
+            self.gate_panel.pack_forget()
+
+    def _gate_cancel(self):
+        if self.read_only or not self._gate_context:
+            return
+        cid = self._gate_context["cid"]
+        note = f"[{datetime.now():%H:%M:%S}] canceled"
+        self._cancellations += 1
+        self._set_attendance(cid, "", note, warn_on_duplicate=False, append=True)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
+
+    def _gate_attend(self):
+        if self.read_only or not self._gate_context:
+            return
+        cid = self._gate_context["cid"]
+        missing = self._gate_context["missing"]
+        base_note = self._clean_value(self.tree.set(cid, "notes"))
+        missing_note = self._build_missing_note(missing)
+        combined = base_note
+        if missing_note:
+            combined = f"{base_note} {missing_note}".strip()
+        self._set_attendance(cid, "attend", combined, warn_on_duplicate=False)
+        self._hide_gate_panel()
+        self.scan_entry.focus_set()
+
+    def _build_missing_note(self, missing):
+        if not missing:
+            return ""
+        if len(missing) == 2:
+            return "[No exam & H.W.]"
+        return "[No exam]" if missing[0] == "exam" else "[No H.W.]"
+
+    def _set_attendance(self, code, attendance, notes, *, warn_on_duplicate=True, append=False):
+        if self.read_only:
+            return False
+        if not self.tree.exists(code):
+            return False
+        current_att = self._clean_value(self.tree.set(code, "attendance")).lower()
+        if warn_on_duplicate and attendance.lower() == "attend" and current_att == "attend":
+            messagebox.showwarning("Already Attended", "This student is already attended.", parent=self)
+            return False
+        current_notes = self._clean_value(self.tree.set(code, "notes"))
+        if append and notes:
+            final_notes = f"{current_notes} {notes}".strip()
+        elif notes != "":
+            final_notes = notes.strip()
+        else:
+            final_notes = current_notes
+        timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+        rec = self._build_record_payload(code, attendance, final_notes, timestamp)
+        self.sm.add_record(rec)
+        self._update_record_cache(rec)
+        self._update_row(code, attendance, final_notes, timestamp)
+        self._refresh_stats()
+        return True
+
+    def _build_record_payload(self, code, attendance, notes, timestamp):
+        rec = {
+            "card_id": code,
+            "student_id": self._clean_value(self.tree.set(code, "student_id")),
+            "name": self._clean_value(self.tree.set(code, "name")),
+            "phone": self._clean_value(self.tree.set(code, "phone")),
+            "attendance": attendance,
+            "notes": notes,
+            "timestamp": timestamp,
+        }
+        if self.restrictions.get("exam") and "exam" in self.tree["columns"]:
+            rec["exam"] = self._clean_value(self.tree.set(code, "exam"))
+        if self.restrictions.get("homework") and "homework" in self.tree["columns"]:
+            rec["homework"] = self._clean_value(self.tree.set(code, "homework"))
+        return rec
+
+    def _update_record_cache(self, rec):
+        cid = str(rec.get("card_id", ""))
+        for existing in self.sm.records:
+            if str(existing.get("card_id", "")) == cid:
+                existing.update(rec)
+                return
+        self.sm.records.append(dict(rec))
+
+    def _update_row(self, code, attendance, notes, timestamp=None):
+        if not self.tree.exists(code):
+            return
+        cols = list(self.tree["columns"])
+        values = list(self.tree.item(code, "values"))
+        try:
+            att_idx = cols.index("attendance")
+            notes_idx = cols.index("notes")
+            ts_idx = cols.index("timestamp")
+        except ValueError:
+            return
+        values[att_idx] = self._clean_value(attendance)
+        values[notes_idx] = self._clean_value(notes)
+        if timestamp is None:
+            df = read_data(self.sm.session_path)
+            card_col = self.mapping.get("card_id", "card_id")
+            ts_col = self.mapping.get("timestamp", "timestamp")
+            mask = df[card_col].astype(str) == str(code)
+            if mask.any() and ts_col in df.columns:
+                timestamp = self._clean_value(df.loc[mask, ts_col].values[0])
+            else:
+                timestamp = ""
+        values[ts_idx] = self._clean_value(timestamp)
+        self.tree.item(code, values=tuple(values))
+
+    def _on_row_double_click(self, _event):
+        if self.read_only:
+            return
+        sel = self.tree.selection()
+        if not sel:
+            return
+        cid = sel[0]
+        missing = self._get_missing_fields(cid)
+        if missing:
+            self._show_gate_panel(cid, missing)
+            return
+        name = self._clean_value(self.tree.set(cid, "name")) or "this student"
+        if messagebox.askyesno("Confirm Attendance", f"Mark {name} as attended?", parent=self):
+            notes = self._clean_value(self.tree.set(cid, "notes"))
+            self._set_attendance(cid, "attend", notes, warn_on_duplicate=True)
+        elif self._clean_value(self.tree.set(cid, "attendance")).lower() == "attend":
+            self._cancel_attendance(cid)
+        self.scan_entry.focus_set()
+
+    def _cancel_attendance(self, code):
+        if self.read_only:
+            return
+        note = f"[{datetime.now():%H:%M:%S}] canceled"
+        self._cancellations += 1
+        self._set_attendance(code, "", note, warn_on_duplicate=False, append=True)
+
+    def _on_add_student_flow(self):
+        self._launch_add_student_dialog()
+
+    def _launch_add_student_dialog(self, card_id=None, default_notes="manual addition"):
+        if self.read_only:
+            return
+        self._pause_focus_guard()
+        normalized_card = None
+        if card_id:
+            raw_card = str(card_id).strip()
+            normalized_card = raw_card.zfill(8) if raw_card.isdigit() else raw_card
+        try:
+            dialog = AddStudentDialog(
+                self,
+                card_id=normalized_card,
+                duplicate_checker=self._student_id_or_phone_exists,
+                default_notes=default_notes,
+                on_submit=self._handle_add_student_submission,
+            )
+        except Exception:
+            self._resume_focus_guard()
+            raise
+
+        def _restore_focus_guard(event):
+            if event.widget is dialog:
+                self._resume_focus_guard()
+
+        dialog.bind("<Destroy>", _restore_focus_guard, add="+")
+
+    def _handle_add_student_submission(self, *, card_id, values, default_notes):
+        cid = card_id
+        if cid:
+            cid = str(cid).strip()
+            if cid.isdigit():
+                cid = cid.zfill(8)
+        else:
+            cid = self._next_unknown_card_id()
+        timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+        rec = {
+            "card_id": cid,
+            "student_id": values["student_id"],
+            "name": values["name"],
+            "phone": values["phone"],
+            "attendance": "attend",
+            "notes": default_notes,
+            "timestamp": timestamp,
+        }
+        if self.restrictions.get("exam"):
+            rec["exam"] = ""
+        if self.restrictions.get("homework"):
+            rec["homework"] = ""
+        self.sm.add_record(rec)
+        self._manual_additions += 1
+        self._update_record_cache(rec)
+        row_values = [
+            rec["card_id"],
+            rec["student_id"],
+            rec["name"],
+            rec["phone"],
+        ]
+        if self.restrictions.get("exam"):
+            row_values.append(rec.get("exam", ""))
+        if self.restrictions.get("homework"):
+            row_values.append(rec.get("homework", ""))
+        row_values.extend([rec["attendance"], rec["notes"], rec["timestamp"]])
+        if self.tree.exists(cid):
+            self.tree.item(cid, values=tuple(row_values))
+        else:
+            self.tree.insert("", "end", iid=cid, values=tuple(row_values))
+            if cid not in self._all_iids:
+                self._all_iids.append(cid)
+        self._update_row(cid, rec["attendance"], rec["notes"], rec["timestamp"])
+        self._refresh_stats()
+        self.after(120, self.scan_entry.focus_set)
+        if hasattr(self.parent, "set_status"):
+            display_name = rec["name"].strip() or rec["student_id"]
+            self.parent.set_status(f"Student '{display_name}' added manually.")
+        return True
+
+    def _next_unknown_card_id(self):
+        if not hasattr(self, "_unknown_counter"):
+            existing = []
+            for record in self.sm.records:
+                card_value = str(record.get("card_id", ""))
+                if card_value.startswith("Unknown "):
+                    suffix = card_value.split("Unknown ", 1)[1]
+                    if suffix.isdigit():
+                        existing.append(int(suffix))
+            self._unknown_counter = max(existing, default=0)
+        self._unknown_counter += 1
+        return f"Unknown {self._unknown_counter}"
+
+    def _on_end_scan(self):
+        if getattr(self, "read_only", False):
+            self._finalize_and_close(status_message=f"Session '{self.sm.name}' closed (view-only).")
+            return
+        self._finalize_and_close()
+
+    def _global_focus_in(self, _event):
+        if self._focus_reset_job is not None:
+            try:
+                self.after_cancel(self._focus_reset_job)
+            except Exception:
+                pass
+            self._focus_reset_job = None
+        if self.read_only or self._focus_guard_depth > 0:
+            return
+        widget = self.focus_get()
+        if widget is None:
+            return
+        # Ignore focus changes coming from other toplevel dialogs (e.g. summary window).
+        try:
+            owning_top = widget.winfo_toplevel()
+        except Exception:
+            owning_top = None
+        if owning_top is not None and owning_top is not self:
+            return
+        if widget == self.scan_entry or widget in self._search_entries:
+            return
+        parent = getattr(widget, "master", None)
+        while parent is not None:
+            if parent == self.gate_panel:
+                return
+            parent = getattr(parent, "master", None)
+        for w in self.winfo_children():
+            if isinstance(w, CTkToplevel):
+                if widget == w or widget.winfo_toplevel() == w:
+                    return
+        self._focus_reset_job = self.after_idle(self._focus_scan_entry)
+
+    def _student_id_or_phone_exists(self, student_id, phone):
+        df = read_data(self.sm.session_path)
+        sid_col = self.mapping.get("student_id", "student_id")
+        phone_col = self.mapping.get("phone", "phone")
+        id_exists = phone_exists = False
+        if sid_col in df.columns:
+            if student_id in df[sid_col].astype(str).values:
+                id_exists = True
+        if phone_col in df.columns:
+            if phone in df[phone_col].astype(str).values:
+                phone_exists = True
+        return id_exists, phone_exists
