@@ -75,6 +75,12 @@ MAPPING_FILE     = os.path.join(ARCHIVE_FOLDER, 'column_map.json')
 SETTINGS_FILE    = os.path.join(ARCHIVE_FOLDER, 'app_settings.json')
 LAST_DATA_FILE   = os.path.join(ARCHIVE_FOLDER, 'last_data.json')
 
+MIN_DASHBOARD_SIZE     = (980, 640)
+MIN_SCAN_SIZE          = (900, 560)
+MIN_SETTINGS_SIZE      = (640, 480)
+MIN_SESSION_SETUP_SIZE = (360, 240)
+MIN_SUMMARY_SIZE       = (380, 320)
+MIN_PAST_SESSIONS_SIZE = (720, 480)
 for folder in (DATA_FOLDER, SESSIONS_FOLDER, ARCHIVE_FOLDER):
     os.makedirs(folder, exist_ok=True)
 
@@ -84,10 +90,52 @@ SETTINGS = {
         "October", "Ferdous", "Helwan", "Hadayek Helwan",
         "Zayed", "Haram", "Dokki", "Maadi", "15 May"
     ],
-    "restrictions": {"exam": False, "homework": False},
+    "restrictions": {"exam": True, "homework": True},
     "file_type": "xlsx"
 }
 
+
+
+def bring_window_to_front(window):
+    """Raise a toplevel window above its siblings and give it focus."""
+    if window is None:
+        return
+    try:
+        window.deiconify()
+    except Exception:
+        pass
+    try:
+        window.lift()
+    except Exception:
+        pass
+    try:
+        window.focus_force()
+    except Exception:
+        pass
+    try:
+        window.attributes('-topmost', True)
+        window.after_idle(lambda: window.attributes('-topmost', False))
+    except Exception:
+        pass
+
+
+def ensure_initial_size(window, *, min_size=None, padding=(0, 0)):
+    """Size a toplevel so its default geometry fits the current layout."""
+    if window is None:
+        return 0, 0
+    window.update_idletasks()
+    req_w = max(window.winfo_reqwidth(), window.winfo_width())
+    req_h = max(window.winfo_reqheight(), window.winfo_height())
+    pad_x, pad_y = padding if isinstance(padding, tuple) else (padding, padding)
+    width = max(int(req_w + pad_x), 1)
+    height = max(int(req_h + pad_y), 1)
+    if min_size:
+        min_w, min_h = min_size
+        width = max(width, int(min_w))
+        height = max(height, int(min_h))
+    window.minsize(width, height)
+    window.geometry(f"{width}x{height}")
+    return width, height
 
 class SettingsWindow(CTkToplevel):
     mapping_placeholder = "-- Select --"
@@ -95,14 +143,14 @@ class SettingsWindow(CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("680x520")
-        self.minsize(640, 480)
+        self.minsize(*MIN_SETTINGS_SIZE)
 
         self.original_bg = Image.open(SETTINGS_BG_FILE)
         self.bg_photo = ImageTk.PhotoImage(self.original_bg)
         self.bg_label = CTkLabel(self, text="", image=self.bg_photo)
         self.bg_label.place(relwidth=1, relheight=1)
         self.bind("<Configure>", self._on_resize)
+        self.after(50, lambda: bring_window_to_front(self))
 
         self.parent_app = parent
         self.column_map = dict(parent.column_map or {})
@@ -166,6 +214,7 @@ class SettingsWindow(CTkToplevel):
             self.template_status_var.set("Load a sample file to map template fields.")
         self._populate_template_controls()
         self._update_apply_state()
+        ensure_initial_size(self, min_size=MIN_SETTINGS_SIZE)
 
     def _on_resize(self, event):
         if event.widget is self:
@@ -455,8 +504,8 @@ class SessionSetupDialog(CTkToplevel):
         self.callback = callback
         self.has_data = has_data
         self.title("Start New Session")
-        self.geometry("360x240")
         self.resizable(False, False)
+        self.minsize(*MIN_SESSION_SETUP_SIZE)
         self.transient(parent)
         self.grid_columnconfigure(1, weight=1)
 
@@ -469,6 +518,7 @@ class SessionSetupDialog(CTkToplevel):
         self.error_var = ctk.StringVar(value="")
 
         self._build_form()
+        ensure_initial_size(self, min_size=MIN_SESSION_SETUP_SIZE)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.bind("<Return>", lambda _e: self._on_submit())
         self.bind("<Escape>", lambda _e: self._on_cancel())
@@ -526,8 +576,7 @@ class SessionSetupDialog(CTkToplevel):
         x = px + max((pw - width) // 2, 0) if pw else px
         y = py + max((ph - height) // 2, 0) if ph else py
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.lift()
-        self.focus_force()
+        bring_window_to_front(self)
 
     def _on_submit(self):
         stage = self.stage_cb.get().strip()
@@ -632,11 +681,10 @@ class PastSessionsWindow(CTkToplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("Past Sessions")
-        self.geometry("720x480")
-        self.minsize(640, 420)
+        self.minsize(*MIN_PAST_SESSIONS_SIZE)
         self._paths = {}
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
+        self.after(50, lambda: bring_window_to_front(self))
         header = CTkLabel(
             self,
             text="Past Sessions",
@@ -675,7 +723,7 @@ class PastSessionsWindow(CTkToplevel):
 
         button_bar = CTkFrame(self, fg_color="transparent")
         button_bar.pack(fill="x", padx=24, pady=(0, 24))
-        button_bar.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="past_actions")
+        button_bar.grid_columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="past_actions")
 
         self.open_btn = CTkButton(
             button_bar,
@@ -696,10 +744,19 @@ class PastSessionsWindow(CTkToplevel):
         self.refresh_btn = CTkButton(button_bar, text="Refresh", command=self.refresh)
         self.refresh_btn.grid(row=0, column=2, padx=6, sticky="ew")
 
+        self.clear_btn = CTkButton(
+            button_bar,
+            text="Clear All",
+            state="disabled",
+            command=self._clear_all_sessions
+        )
+        self.clear_btn.grid(row=0, column=3, padx=6, sticky="ew")
+
         self.close_btn = CTkButton(button_bar, text="Close", command=self._on_close)
-        self.close_btn.grid(row=0, column=3, padx=(6, 0), sticky="ew")
+        self.close_btn.grid(row=0, column=4, padx=(6, 0), sticky="ew")
 
         self.refresh()
+        ensure_initial_size(self, min_size=MIN_PAST_SESSIONS_SIZE)
 
     def refresh(self):
         for item in self.tree.get_children():
@@ -708,6 +765,7 @@ class PastSessionsWindow(CTkToplevel):
         if not os.path.isdir(SESSIONS_FOLDER):
             self._toggle_empty_state(True)
             self._on_select()
+            self._update_clear_state()
             return
         files = []
         for entry in os.listdir(SESSIONS_FOLDER):
@@ -725,6 +783,11 @@ class PastSessionsWindow(CTkToplevel):
             self._paths[iid] = path_entry
         self._toggle_empty_state(len(self._paths) == 0)
         self._on_select()
+        self._update_clear_state()
+
+    def _update_clear_state(self):
+        state = "normal" if self._paths else "disabled"
+        self.clear_btn.configure(state=state)
 
     def _toggle_empty_state(self, show):
         if show:
@@ -765,6 +828,45 @@ class PastSessionsWindow(CTkToplevel):
             return
         self.parent._reveal_session_path(path_entry)
 
+    def _clear_all_sessions(self):
+        if not self._paths:
+            return
+        confirm = messagebox.askyesno(
+            "Clear All Sessions",
+            "Delete all saved session files?",
+            parent=self
+        )
+        if not confirm:
+            return
+        failures = []
+        for path_entry in list(self._paths.values()):
+            try:
+                os.remove(path_entry)
+            except Exception as exc:
+                failures.append(f"{os.path.basename(path_entry)}: {exc}")
+        self.refresh()
+        if hasattr(self.parent, "_refresh_recent_sessions"):
+            try:
+                self.parent._refresh_recent_sessions()
+            except Exception:
+                pass
+        if failures:
+            messagebox.showerror(
+                "Delete Failed",
+                "Some session files could not be deleted:\n" + "\n".join(failures),
+                parent=self
+            )
+            if hasattr(self.parent, "set_status"):
+                self.parent.set_status("Some past sessions could not be removed.")
+            return
+        messagebox.showinfo(
+            "Sessions Cleared",
+            "All past session files have been deleted.",
+            parent=self
+        )
+        if hasattr(self.parent, "set_status"):
+            self.parent.set_status("All past sessions cleared.")
+
     def _on_close(self):
         if hasattr(self.parent, "past_sessions_window"):
             self.parent.past_sessions_window = None
@@ -774,7 +876,6 @@ class App(CTk):
     def __init__(self):
         super().__init__()
         self.title("RFID Attendance Manager")
-        self.geometry("800x600")
         self.column_map = {}
         self.data_df    = None
         self.settings_window = None  # <-- Track settings window
@@ -784,6 +885,7 @@ class App(CTk):
         self.current_data_path = None
         self._session_setup = None
         self.past_sessions_window = None
+        self.summary_window = None
 
         if os.path.exists(MAPPING_FILE):
             with open(MAPPING_FILE) as f:
@@ -793,6 +895,8 @@ class App(CTk):
                 SETTINGS.update(json.load(f))
 
         self._build_ui()
+        width, height = ensure_initial_size(self, min_size=MIN_DASHBOARD_SIZE)
+        self.minsize(width, height)
         self._load_last_data()
 
     def _build_ui(self):
@@ -804,14 +908,13 @@ class App(CTk):
 
         content = CTkFrame(self.main_frame, fg_color="transparent")
         content.grid(row=0, column=0, sticky="nsew")
-        content.grid_columnconfigure(0, weight=3)
-        content.grid_columnconfigure(1, weight=2)
+        content.grid_columnconfigure(0, weight=1)
         content.grid_rowconfigure(0, weight=0)
         content.grid_rowconfigure(1, weight=0)
         content.grid_rowconfigure(2, weight=1)
 
         header = CTkFrame(content, fg_color="transparent")
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         header.grid_columnconfigure(1, weight=1)
 
         logo = Image.open(LOGO_FILE)
@@ -837,12 +940,11 @@ class App(CTk):
         self._build_data_status_panel(content)
 
         actions_frame = CTkFrame(content, fg_color="transparent")
-        actions_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 24))
+        actions_frame.grid(row=2, column=0, sticky="nsew")
         actions_frame.grid_columnconfigure((0, 1), weight=1, uniform="actions")
         actions_frame.grid_rowconfigure((0, 1), weight=1)
 
         button_specs = [
-            ("Import Data", self.import_csv),
             ("Start New Session", self.open_scan_window),
             ("View Past Sessions", self.view_past_sessions),
             ("Settings", self.open_settings),
@@ -860,81 +962,6 @@ class App(CTk):
             btn.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
             self.dashboard_buttons.append(btn)
 
-        recent_frame = CTkFrame(content, fg_color="transparent")
-        recent_frame.grid(row=2, column=1, sticky="nsew")
-        recent_frame.grid_rowconfigure(1, weight=1)
-
-        CTkLabel(
-            recent_frame,
-            text="Recent Sessions",
-            font=("Arial", 18, "bold")
-        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
-
-        tree_container = CTkFrame(recent_frame, fg_color="transparent")
-        tree_container.grid(row=1, column=0, sticky="nsew")
-        tree_container.grid_columnconfigure(0, weight=1)
-        tree_container.grid_rowconfigure(0, weight=1)
-
-        style = ttk.Style(self)
-        style.configure(
-            "Dashboard.Treeview",
-            rowheight=30,
-            borderwidth=0,
-            font=("Arial", 12)
-        )
-        style.configure(
-            "Dashboard.Treeview.Heading",
-            font=("Arial", 12, "bold")
-        )
-        style.map(
-            "Dashboard.Treeview",
-            background=[("selected", "#1f6aa5")],
-            foreground=[("selected", "#ffffff")]
-        )
-
-        self.recent_tree = ttk.Treeview(
-            tree_container,
-            columns=("name", "modified"),
-            show="headings",
-            selectmode="browse",
-            style="Dashboard.Treeview"
-        )
-        self.recent_tree.heading("name", text="Session")
-        self.recent_tree.column("name", anchor="w", width=220)
-        self.recent_tree.heading("modified", text="Last Modified")
-        self.recent_tree.column("modified", anchor="center", width=160)
-        self.recent_tree.grid(row=0, column=0, sticky="nsew")
-
-        scrollbar = ttk.Scrollbar(
-            tree_container,
-            orient="vertical",
-            command=self.recent_tree.yview
-        )
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.recent_tree.configure(yscrollcommand=scrollbar.set)
-        self.recent_tree.bind("<<TreeviewSelect>>", self._on_recent_select)
-        self.recent_tree.bind("<Double-1>", lambda _e: self._open_selected_session())
-
-        actions_bar = CTkFrame(recent_frame, fg_color="transparent")
-        actions_bar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        actions_bar.grid_columnconfigure((0, 1), weight=1, uniform="recent_actions")
-
-        self.recent_open_button = CTkButton(
-            actions_bar,
-            text="Open",
-            command=self._open_selected_session,
-            state="disabled"
-        )
-        self.recent_open_button.grid(row=0, column=0, padx=(0, 6), sticky="ew")
-
-        self.recent_reveal_button = CTkButton(
-            actions_bar,
-            text="Reveal in Folder",
-            command=self._reveal_selected_session,
-            state="disabled"
-        )
-        self.recent_reveal_button.grid(row=0, column=1, padx=(6, 0), sticky="ew")
-
         self.status_var = ctk.StringVar(value="Ready.")
         self.status_label = CTkLabel(
             self.main_frame,
@@ -948,8 +975,8 @@ class App(CTk):
         self._refresh_recent_sessions()
 
     def _build_data_status_panel(self, parent):
-        panel = CTkFrame(parent, fg_color=("#1f2933", "#f2f3f5"), corner_radius=12)
-        panel.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        panel = CTkFrame(parent, fg_color=("#f2f3f5", "#1f2933"), corner_radius=12)
+        panel.grid(row=1, column=0, sticky="ew", pady=(0, 16))
         panel.grid_columnconfigure(0, weight=1)
         CTkLabel(
             panel,
@@ -989,6 +1016,20 @@ class App(CTk):
         self.data_path_var.set("")
         self.current_data_path = None
 
+
+    def show_session_summary(self, *, session_name, summary, session_path, read_only=False):
+        if self.summary_window is not None and self.summary_window.winfo_exists():
+            try:
+                self.summary_window.destroy()
+            except Exception:
+                pass
+        self.summary_window = SessionSummaryDialog(
+            self,
+            session_name=session_name,
+            summary=summary,
+            session_path=session_path,
+            read_only=read_only,
+        )
 
     def set_status(self, message):
         if hasattr(self, "status_var"):
@@ -1080,11 +1121,10 @@ class App(CTk):
 
     def view_past_sessions(self):
         if self.past_sessions_window is not None and self.past_sessions_window.winfo_exists():
-            self.past_sessions_window.focus_force()
-            self.past_sessions_window.lift()
+            bring_window_to_front(self.past_sessions_window)
             return
         self.past_sessions_window = PastSessionsWindow(self)
-        self.past_sessions_window.focus_force()
+        bring_window_to_front(self.past_sessions_window)
         self.set_status("Browsing past sessions.")
 
 
@@ -1116,10 +1156,10 @@ class App(CTk):
     def open_settings(self):
         # Only open one settings window at a time
         if self.settings_window is not None and self.settings_window.winfo_exists():
-            self.settings_window.focus_force()
-            self.settings_window.lift()
+            bring_window_to_front(self.settings_window)
             return
         self.settings_window = SettingsWindow(self)
+        bring_window_to_front(self.settings_window)
         self.settings_window.protocol("WM_DELETE_WINDOW", self._on_settings_close)
 
     def _on_settings_close(self):
@@ -1135,7 +1175,7 @@ class App(CTk):
         if not self.column_map:
             messagebox.showwarning("No Template", "Please configure a template first.")
             self.set_status("Import canceled - configure column template first.")
-            return
+            return False
 
         file_type = SETTINGS.get("file_type", "csv")
         ext = "*.xlsx" if file_type == "xlsx" else "*.csv"
@@ -1145,7 +1185,7 @@ class App(CTk):
         )
         if not path:
             self.set_status("Import canceled.")
-            return
+            return False
         try:
             df = read_data(path)
             # Pad card_id column to 8 digits and assign 'null N' for blanks
@@ -1174,17 +1214,22 @@ class App(CTk):
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
             self.set_status("Import failed.")
-            return
+            return False
         self.data_df = df
         with open(LAST_DATA_FILE, "w") as f:
             json.dump({"path": path}, f, indent=2)
         self._update_data_status_panel(path, len(df))
         self.set_status(f"Imported {len(df)} records from {os.path.basename(path)}.")
+        return True
 
     def open_scan_window(self):
         if self._session_setup is not None and self._session_setup.winfo_exists():
-            self._session_setup.focus_force()
+            bring_window_to_front(self._session_setup)
             return
+
+        if not self.import_csv():
+            return
+
         self._session_setup = SessionSetupDialog(
             self,
             SETTINGS["stage_options"],
@@ -1199,9 +1244,9 @@ class App(CTk):
             self.set_status("Session setup canceled.")
             return
         if self.data_df is None:
-            self.data_df = self._create_blank_roster()
-            self._hide_data_status_panel()
-            self.set_status("Starting session with a blank roster.")
+            messagebox.showwarning("No Data", "Please import data before starting a session.")
+            self.set_status("Session setup aborted - no data loaded.")
+            return
         name = payload["name"]
         params = {"stage": payload["stage"], "center": payload["center"], "no": payload["no"]}
         file_type = SETTINGS.get("file_type", "csv")
@@ -1222,91 +1267,295 @@ class App(CTk):
         else:
             self.set_status(f"Session '{name}' ready.")
 
-    def _create_blank_roster(self):
-        columns = ["card_id", "student_id", "name", "phone"]
-        if SETTINGS["restrictions"].get("exam"):
-            columns.append("exam")
-        if SETTINGS["restrictions"].get("homework"):
-            columns.append("homework")
-        columns.extend(["attendance", "notes", "timestamp"])
-        return pd.DataFrame(columns=columns)
+class AddStudentDialog(CTkToplevel):
+    def __init__(self, parent, *, card_id=None, on_submit=None, duplicate_checker=None, default_notes="manual addition"):
+        super().__init__(parent)
+        self.parent = parent
+        self.card_id = card_id.zfill(8) if card_id and card_id.isdigit() else card_id
+        self._on_submit = on_submit
+        self._duplicate_checker = duplicate_checker
+        self._default_notes = default_notes or "manual addition"
+        self._focus_guard_restored = False
+
+        self.title("Add Student")
+        self.minsize(*MIN_SUMMARY_SIZE)
+        self.transient(parent)
+        self.grab_set()
+        self.after(40, self._activate_modal)
+
+        container = CTkFrame(self, corner_radius=16, fg_color=("#f4f6fb", "#1a1d23"))
+        container.pack(fill="both", expand=True, padx=24, pady=24)
+        container.grid_columnconfigure(0, weight=1)
+
+        header = CTkFrame(container, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        CTkLabel(header, text="Add Student", font=("Arial", 22, "bold")).grid(row=0, column=0, sticky="w")
+        subtitle = "Link a scanned card to a student profile." if self.card_id else "Create a manual record for a student."
+        CTkLabel(header, text=subtitle, font=("Arial", 13)).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        if self.card_id:
+            CTkLabel(
+                header,
+                text=f"Card ID: {self.card_id}",
+                font=("Arial", 12, "bold"),
+                text_color="#1f6aa5"
+            ).grid(row=2, column=0, sticky="w", pady=(12, 0))
+
+        form = CTkFrame(container, fg_color="transparent")
+        form.grid(row=1, column=0, sticky="ew", pady=(20, 0))
+        form.grid_columnconfigure(0, weight=0)
+        form.grid_columnconfigure(1, weight=1)
+
+        self.inputs = {}
+        field_specs = [
+            ("student_id", "Student ID", "e.g. 102534"),
+            ("name", "Student Name", "Full name"),
+            ("phone", "Phone Number", "e.g. 01012345678"),
+        ]
+        for row_index, (key, label_text, placeholder) in enumerate(field_specs):
+            CTkLabel(form, text=label_text, font=("Arial", 12, "bold")).grid(
+                row=row_index, column=0, sticky="w", padx=(0, 12), pady=(0, 10)
+            )
+            entry = CTkEntry(form, placeholder_text=placeholder)
+            entry.grid(row=row_index, column=1, sticky="ew", pady=(0, 10))
+            self.inputs[key] = entry
+
+        self.feedback_var = ctk.StringVar(value="")
+        self.feedback_label = CTkLabel(
+            container,
+            textvariable=self.feedback_var,
+            font=("Arial", 12),
+            text_color="#d64b4b"
+        )
+        self.feedback_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+
+        actions = CTkFrame(container, fg_color="transparent")
+        actions.grid(row=3, column=0, sticky="ew", pady=(24, 0))
+        actions.grid_columnconfigure((0, 1), weight=1, uniform="dialog_actions")
+
+        self.cancel_button = CTkButton(
+            actions,
+            text="Cancel",
+            command=self._on_cancel,
+            fg_color=("#e5e7eb", "#2d2f36"),
+            hover_color=("#d1d5db", "#363a45"),
+            text_color=("#0f172a", "#f8fafc")
+        )
+        self.cancel_button.grid(row=0, column=0, padx=(0, 12), sticky="ew")
+
+        self.confirm_button = CTkButton(actions, text="Add Student", command=self._on_confirm)
+        self.confirm_button.grid(row=0, column=1, sticky="ew")
+
+        ensure_initial_size(self, min_size=MIN_SUMMARY_SIZE)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self._first_entry = next(iter(self.inputs.values()), None)
+        self.bind("<Return>", lambda _event: self._on_confirm())
+        self.bind("<Escape>", lambda _event: self._on_cancel())
+
+    def _set_feedback(self, message, level="error"):
+        colors = {
+            "error": "#d64b4b",
+            "warning": "#d67b2d",
+            "info": "#1f6aa5",
+        }
+        color = colors.get(level, "#d64b4b")
+        self.feedback_label.configure(text_color=color)
+        self.feedback_var.set(message)
+
+    def _activate_modal(self):
+        bring_window_to_front(self)
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+        try:
+            self.focus_force()
+        except Exception:
+            pass
+        if self._first_entry is not None and self._first_entry.winfo_exists():
+            self._first_entry.focus_set()
+
+    def _on_confirm(self):
+        values = {key: entry.get().strip() for key, entry in self.inputs.items()}
+        if not all(values.values()):
+            self._set_feedback("Please fill in every field before continuing.", level="warning")
+            return
+        if self._duplicate_checker:
+            try:
+                id_exists, phone_exists = self._duplicate_checker(values["student_id"], values["phone"])
+            except Exception as exc:
+                self._set_feedback(str(exc))
+                return
+            if id_exists or phone_exists:
+                if id_exists and phone_exists:
+                    msg = "This student ID and phone number already exist."
+                elif id_exists:
+                    msg = "This student ID already exists."
+                else:
+                    msg = "This phone number already exists."
+                self._set_feedback(msg, level="warning")
+                return
+        if not self._on_submit:
+            self._finalize()
+            return
+        try:
+            outcome = self._on_submit(card_id=self.card_id, values=values, default_notes=self._default_notes)
+        except Exception as exc:
+            self._set_feedback(str(exc))
+            return
+        if outcome is None:
+            success, message = True, None
+        elif isinstance(outcome, tuple):
+            success, message = outcome
+        else:
+            success, message = bool(outcome), None
+        if success:
+            self._set_feedback("")
+            self._finalize()
+        else:
+            self._set_feedback(message or "Unable to add student.", level="error")
+
+    def _finalize(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        if not getattr(self, "_focus_guard_restored", False):
+            if hasattr(self.parent, "_resume_focus_guard"):
+                self.parent._resume_focus_guard()
+            self._focus_guard_restored = True
+        if self.winfo_exists():
+            self.destroy()
+        if hasattr(self.parent, "scan_entry"):
+            self.parent.after(120, self.parent.scan_entry.focus_set)
+
+    def _on_cancel(self):
+        self._set_feedback("")
+        self._finalize()
+
 class SessionSummaryDialog(CTkToplevel):
-    def __init__(self, parent, session_name, summary, session_path, callback):
+    def __init__(self, parent, *, session_name, summary, session_path, read_only=False):
         super().__init__(parent)
         self.parent = parent
         self.session_name = session_name
-        self.summary = summary
+        self.summary = summary or {}
         self.session_path = session_path
-        self._callback = callback
+        self.read_only = read_only
 
         self.title("Session Summary")
-        self.geometry("420x360")
-        self.resizable(False, False)
+        self.minsize(*MIN_SUMMARY_SIZE)
         self.transient(parent)
         self.grab_set()
+        self.after(40, lambda: bring_window_to_front(self))
 
-        header = CTkLabel(
-            self,
-            text=f"Summary: {session_name}",
-            font=("Arial", 20, "bold")
-        )
-        header.pack(anchor="w", padx=24, pady=(24, 12))
+        container = CTkFrame(self, corner_radius=16, fg_color=("#f4f6fb", "#1a1d23"))
+        container.pack(fill="both", expand=True, padx=24, pady=24)
+        container.grid_columnconfigure(0, weight=1)
 
-        content = CTkFrame(self, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=24)
-        content.grid_columnconfigure(0, weight=1)
-        content.grid_columnconfigure(1, weight=1)
+        header = CTkFrame(container, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+        CTkLabel(header, text="Session Summary", font=("Arial", 22, "bold")).grid(row=0, column=0, sticky="w")
+        subtitle = f"{session_name}" if session_name else "Session details"
+        CTkLabel(header, text=subtitle, font=("Arial", 13)).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        if read_only:
+            CTkLabel(header, text="Read-only session", font=("Arial", 12), text_color="#64748b").grid(row=2, column=0, sticky="w", pady=(6, 0))
 
-        rows = [
-            ("Total Students", f"{summary['total']}")
-        ]
-        rows.append(("Attended", f"{summary['attended']} ({summary['percent']})"))
-        if summary.get('missing_exam') is not None:
-            rows.append(("Missing Exam", f"{summary['missing_exam']}"))
-        if summary.get('missing_hw') is not None:
-            rows.append(("Missing Homework", f"{summary['missing_hw']}"))
-        rows.append(("Manual Additions", f"{summary['manual_additions']}"))
-        rows.append(("Cancellations", f"{summary['cancellations']}"))
+        metrics_frame = CTkFrame(container, fg_color="transparent")
+        metrics_frame.grid(row=1, column=0, sticky="ew", pady=(18, 12))
+        metrics_frame.grid_columnconfigure(0, weight=1)
 
-        for idx, (label, value) in enumerate(rows):
-            CTkLabel(content, text=label, font=("Arial", 13, "bold")).grid(row=idx, column=0, sticky="w", pady=4)
-            CTkLabel(content, text=value, font=("Arial", 13)).grid(row=idx, column=1, sticky="e", pady=4)
+        metrics = []
+        total = self.summary.get("total")
+        if total is not None:
+            metrics.append(("Total students", f"{total:,}"))
+        attended = self.summary.get("attended")
+        if attended is not None:
+            metrics.append(("Attended", f"{attended:,}"))
+        rate = self.summary.get("attendance_rate")
+        if rate is not None:
+            metrics.append(("Attendance rate", rate))
+        manual = self.summary.get("manual_additions")
+        if manual is not None:
+            metrics.append(("Manual additions", f"{manual:,}"))
+        cancels = self.summary.get("cancellations")
+        if cancels is not None:
+            metrics.append(("Cancellations", f"{cancels:,}"))
+        if "missing_exam" in self.summary:
+            metrics.append(("Missing exam", f"{self.summary['missing_exam']:,}"))
+        if "missing_hw" in self.summary:
+            metrics.append(("Missing homework", f"{self.summary['missing_hw']:,}"))
 
-        button_bar = CTkFrame(self, fg_color="transparent")
-        button_bar.pack(fill="x", padx=24, pady=(12, 24))
-        button_bar.grid_columnconfigure((0, 1, 2), weight=1, uniform="summary_actions")
+        for row_index, (label_text, value_text) in enumerate(metrics):
+            row = CTkFrame(metrics_frame, fg_color="transparent")
+            row.grid(row=row_index, column=0, sticky="ew", pady=(0, 6))
+            CTkLabel(row, text=label_text, font=("Arial", 12, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+            CTkLabel(row, text=value_text, font=("Arial", 12), anchor="w").grid(row=1, column=0, sticky="w")
 
-        CTkButton(button_bar, text="Save & Close", command=self._on_save_close).grid(row=0, column=0, padx=(0, 6), sticky="ew")
-        CTkButton(button_bar, text="Open Session File", command=self._open_session_file).grid(row=0, column=1, padx=6, sticky="ew")
-        CTkButton(button_bar, text="Return to Scanning", command=self._on_return_to_scan).grid(row=0, column=2, padx=(6, 0), sticky="ew")
+        path_frame = CTkFrame(container, fg_color="transparent")
+        path_frame.grid(row=2, column=0, sticky="ew")
+        path_frame.grid_columnconfigure(0, weight=1)
+        CTkLabel(path_frame, text="Saved file", font=("Arial", 12, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+        display_path = session_path if session_path else "Unavailable"
+        CTkLabel(path_frame, text=display_path, font=("Arial", 11), anchor="w", wraplength=320, justify="left").grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
-        self.protocol("WM_DELETE_WINDOW", self._on_return_to_scan)
+        actions = CTkFrame(container, fg_color="transparent")
+        actions.grid(row=3, column=0, sticky="ew", pady=(24, 0))
+        actions.grid_columnconfigure((0, 1), weight=1, uniform="summary_actions")
 
-    def _emit(self, action):
-        if self._callback:
-            callback = self._callback
-            self._callback = None
-            callback(action)
+        self.view_button = CTkButton(actions, text="View File Location", command=self._open_location)
+        self.view_button.grid(row=0, column=0, padx=(0, 12), sticky="ew")
+        if not session_path:
+            self.view_button.configure(state="disabled")
 
-    def _on_save_close(self):
-        self.destroy()
-        self._emit("save_close")
+        close_button = CTkButton(actions, text="Close", command=self._on_close)
+        close_button.grid(row=0, column=1, sticky="ew")
 
-    def _on_return_to_scan(self):
-        self.destroy()
-        self._emit("return")
+        ensure_initial_size(self, min_size=MIN_SUMMARY_SIZE)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _open_session_file(self):
+    def _open_location(self):
+        path = self.session_path
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if os.path.isdir(abs_path):
+            target = abs_path
+        else:
+            target = os.path.dirname(abs_path) or abs_path
+        if not os.path.exists(target):
+            messagebox.showerror("Location Not Found", "The saved file or folder could not be located.", parent=self)
+            return
         try:
             if sys.platform.startswith("win"):
-                os.startfile(self.session_path)
+                if os.path.isdir(abs_path):
+                    os.startfile(abs_path)
+                elif os.path.isfile(abs_path):
+                    norm = os.path.normpath(abs_path)
+                    subprocess.Popen(["explorer", "/select,", norm])
+                else:
+                    os.startfile(target)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", self.session_path])
+                if os.path.isdir(abs_path):
+                    subprocess.Popen(["open", target])
+                else:
+                    subprocess.Popen(["open", "-R", abs_path])
             else:
-                subprocess.Popen(["xdg-open", self.session_path])
+                subprocess.Popen(["xdg-open", target])
         except Exception as exc:
-            messagebox.showerror("Open Failed", str(exc), parent=self)
+            messagebox.showerror("Unable to open location", str(exc), parent=self)
 
+    def _on_close(self):
+        if hasattr(self.parent, "summary_window") and self.parent.summary_window is self:
+            self.parent.summary_window = None
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        if self.winfo_exists():
+            self.destroy()
 
 class ScanWindow(CTkToplevel):
     def __init__(self, parent, session_mgr, read_only=False):
@@ -1325,17 +1574,18 @@ class ScanWindow(CTkToplevel):
         self.bind("<Configure>", self._on_bg_resize)
 
         self.title("Scan Attendance")
-        self.geometry("800x520")
         self.protocol("WM_DELETE_WINDOW", self._on_end_scan)
+        self.after(50, lambda: bring_window_to_front(self))
 
         self._all_iids = []
         self._visible_iids = []
         self._search_entries = []
-        self.search_vars = {}
+        self.search_var = None
         self._gate_context = None
-        self._summary_dialog = None
         self._manual_additions = 0
         self._cancellations = 0
+        self._focus_reset_job = None
+        self._focus_guard_depth = 0
 
         self.stats_vars = {
             "total": ctk.StringVar(value="0"),
@@ -1350,6 +1600,7 @@ class ScanWindow(CTkToplevel):
         self._apply_treeview_style()
         self._load_existing()
         self._refresh_stats()
+        ensure_initial_size(self, min_size=MIN_SCAN_SIZE)
 
         if not self.read_only:
             self.bind_all("<FocusIn>", self._global_focus_in, add="+")
@@ -1360,6 +1611,28 @@ class ScanWindow(CTkToplevel):
             bg = self.original_bg.resize((event.width, event.height), Image.LANCZOS)
             self.bg_photo = ImageTk.PhotoImage(bg)
             self.bg_label.configure(image=self.bg_photo)
+
+    def _focus_scan_entry(self):
+        self._focus_reset_job = None
+        if self.read_only or self._focus_guard_depth > 0:
+            return
+        try:
+            self.scan_entry.focus_set()
+        except Exception:
+            pass
+
+    def _pause_focus_guard(self):
+        if self._focus_reset_job is not None:
+            try:
+                self.after_cancel(self._focus_reset_job)
+            except Exception:
+                pass
+            self._focus_reset_job = None
+        self._focus_guard_depth += 1
+
+    def _resume_focus_guard(self):
+        if self._focus_guard_depth > 0:
+            self._focus_guard_depth -= 1
 
     def _build_ui(self):
         top_bar = CTkFrame(self, fg_color="transparent")
@@ -1397,21 +1670,21 @@ class ScanWindow(CTkToplevel):
 
         search_frame = CTkFrame(self, fg_color="transparent")
         search_frame.pack(fill="x", padx=12, pady=(0, 10))
-        search_fields = [
-            ("student_id", "Student ID"),
-            ("name", "Name"),
-            ("phone", "Phone"),
-        ]
-        for idx, (field, placeholder) in enumerate(search_fields):
-            var = ctk.StringVar()
-            entry = CTkEntry(search_frame, textvariable=var, placeholder_text=placeholder)
-            entry.grid(row=0, column=idx, sticky="ew", padx=5)
-            var.trace_add("write", self._on_search_change)
-            self.search_vars[field] = var
-            self._search_entries.append(entry)
-            search_frame.grid_columnconfigure(idx, weight=1)
+        self.search_var = ctk.StringVar()
+        search_entry = CTkEntry(
+            search_frame,
+            textvariable=self.search_var,
+            placeholder_text="Search by card, ID, name, phone",
+        )
+        search_entry.grid(row=0, column=0, sticky="ew", padx=5)
+        search_frame.grid_columnconfigure(0, weight=1)
+        self.search_var.trace_add("write", self._on_search_change)
+        self._search_entries.append(search_entry)
+        search_entry.bind("<FocusIn>", lambda _e: self._pause_focus_guard())
+        search_entry.bind("<FocusOut>", lambda _e: self._resume_focus_guard())
+        self.smart_search_entry = search_entry
 
-        self.gate_panel = CTkFrame(self, fg_color=("#1f2933", "#e2e8f0"), corner_radius=8)
+        self.gate_panel = CTkFrame(self, fg_color=("#e2e8f0", "#1f2933"), corner_radius=8)
         self.gate_label = CTkLabel(
             self.gate_panel,
             textvariable=self.gate_message_var,
@@ -1464,7 +1737,7 @@ class ScanWindow(CTkToplevel):
             self.control_frame.pack_forget()
 
     def _build_stats_strip(self):
-        self.stats_frame = CTkFrame(self, fg_color=("#12263a", "#f1f5f9"), corner_radius=10)
+        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=10)
         self.stats_frame.pack(fill="x", padx=12, pady=(0, 10))
         stats = [
             ("Total Rows", self.stats_vars["total"]),
@@ -1570,7 +1843,7 @@ class ScanWindow(CTkToplevel):
             return ""
         return text
 
-    def _refresh_stats(self):
+    def _compute_summary_metrics(self):
         total = len(self._all_iids)
         attended = 0
         missing_exam = 0
@@ -1587,87 +1860,88 @@ class ScanWindow(CTkToplevel):
             if self.restrictions.get("homework"):
                 if not self._clean_value(self.tree.set(iid, "homework")):
                     missing_hw += 1
-        percent = "0%"
+        percent_text = "0%"
         if total:
-            percent = f"{(attended / total) * 100:.1f}%"
-        self.stats_vars["total"].set(f"{total}")
-        self.stats_vars["attended"].set(f"{attended}")
-        self.stats_vars["percent"].set(percent)
-        if self.restrictions.get("exam"):
-            self.stats_vars["missing_exam"].set(f"{missing_exam}")
-        if self.restrictions.get("homework"):
-            self.stats_vars["missing_hw"].set(f"{missing_hw}")
-
-    def _collect_session_summary(self):
-        total = sum(1 for iid in self._all_iids if self.tree.exists(iid))
-        attended = 0
-        missing_exam = 0
-        missing_hw = 0
-        for iid in self._all_iids:
-            if not self.tree.exists(iid):
-                continue
-            attendance = self._clean_value(self.tree.set(iid, "attendance")).lower()
-            if attendance == "attend":
-                attended += 1
-            if self.restrictions.get("exam"):
-                if not self._clean_value(self.tree.set(iid, "exam")):
-                    missing_exam += 1
-            if self.restrictions.get("homework"):
-                if not self._clean_value(self.tree.set(iid, "homework")):
-                    missing_hw += 1
-        percent = "0%"
-        if total:
-            percent = f"{(attended / total) * 100:.1f}%"
-        return {
+            percent_text = f"{(attended / total) * 100:.1f}%"
+        metrics = {
             "total": total,
             "attended": attended,
-            "percent": percent,
-            "missing_exam": missing_exam if self.restrictions.get("exam") else None,
-            "missing_hw": missing_hw if self.restrictions.get("homework") else None,
-            "manual_additions": self._manual_additions,
-            "cancellations": self._cancellations,
+            "attendance_rate": percent_text,
         }
+        if self.restrictions.get("exam"):
+            metrics["missing_exam"] = missing_exam
+        if self.restrictions.get("homework"):
+            metrics["missing_hw"] = missing_hw
+        return metrics
 
-    def _handle_summary_result(self, action):
-        self._summary_dialog = None
-        if action == "save_close":
-            self._finalize_and_close()
-        elif action == "return":
-            if not getattr(self, "read_only", False) and hasattr(self, "scan_entry"):
-                self.after_idle(self.scan_entry.focus_set)
+    def _build_summary_payload(self):
+        metrics = self._compute_summary_metrics()
+        summary = dict(metrics)
+        summary["manual_additions"] = self._manual_additions
+        summary["cancellations"] = self._cancellations
+        return summary
+
+    def _refresh_stats(self):
+        metrics = self._compute_summary_metrics()
+        self.stats_vars["total"].set(f"{metrics['total']}")
+        self.stats_vars["attended"].set(f"{metrics['attended']}")
+        self.stats_vars["percent"].set(metrics["attendance_rate"])
+        if self.restrictions.get("exam"):
+            self.stats_vars["missing_exam"].set(f"{metrics.get('missing_exam', 0)}")
+        if self.restrictions.get("homework"):
+            self.stats_vars["missing_hw"].set(f"{metrics.get('missing_hw', 0)}")
 
     def _finalize_and_close(self, status_message=None):
-        self._summary_dialog = None
         if status_message is None:
             status_message = f"Session '{self.sm.name}' saved and closed."
+        summary = self._build_summary_payload()
+        session_name = self.sm.name
+        session_path = getattr(self.sm, "session_path", None)
+        parent = self.parent
+        read_only = getattr(self, "read_only", False)
         if self.winfo_exists():
             self.destroy()
-        if hasattr(self.parent, "_refresh_recent_sessions"):
-            self.parent._refresh_recent_sessions()
-        if getattr(self.parent, "past_sessions_window", None) and self.parent.past_sessions_window.winfo_exists():
-            self.parent.past_sessions_window.refresh()
-        if hasattr(self.parent, "set_status"):
-            self.parent.set_status(status_message)
+        if hasattr(parent, "_refresh_recent_sessions"):
+            parent._refresh_recent_sessions()
+        if getattr(parent, "past_sessions_window", None) and parent.past_sessions_window.winfo_exists():
+            parent.past_sessions_window.refresh()
+        if hasattr(parent, "set_status"):
+            parent.set_status(status_message)
+        if hasattr(parent, "show_session_summary"):
+            try:
+                parent.after(160, lambda: parent.show_session_summary(
+                    session_name=session_name,
+                    summary=summary,
+                    session_path=session_path,
+                    read_only=read_only,
+                ))
+            except Exception:
+                pass
 
     def _on_search_change(self, *_):
         self._filter_all()
 
     def _filter_all(self):
-        terms = {field: self._clean_value(var.get()).lower() for field, var in self.search_vars.items()}
-        if not any(terms.values()):
+        query = ''
+        if self.search_var is not None:
+            query = self._clean_value(self.search_var.get()).lower()
+        terms = [term for term in query.split() if term]
+        if not terms:
             for iid in self._all_iids:
                 if self.tree.exists(iid):
                     self.tree.reattach(iid, '', 'end')
             return
+        columns = self.tree['columns']
         for iid in self._all_iids:
             if not self.tree.exists(iid):
                 continue
-            match = True
-            for field, term in terms.items():
-                if term and term not in self._clean_value(self.tree.set(iid, field)).lower():
-                    match = False
-                    break
-            if match:
+            values = [
+                self._clean_value(self.tree.set(iid, col)).lower()
+                for col in columns
+            ]
+            values.append(str(iid).lower())
+            haystack = ' '.join(values)
+            if all(term in haystack for term in terms):
                 self.tree.reattach(iid, '', 'end')
             else:
                 self.tree.detach(iid)
@@ -1900,128 +2174,116 @@ class ScanWindow(CTkToplevel):
     def _launch_add_student_dialog(self, card_id=None, default_notes="manual addition"):
         if self.read_only:
             return
-        if card_id and card_id.isdigit():
-            card_id = card_id.zfill(8)
-        dlg = CTkToplevel(self)
-        dlg.title("Add Student")
-        width = 360
-        height = 220 if card_id else 190
-        dlg.geometry(f"{width}x{height}")
-        dlg.transient(self)
-        dlg.grab_set()
-        bg_img = self.original_bg.resize((width, height), Image.LANCZOS)
-        bg = ImageTk.PhotoImage(bg_img)
-        background = CTkLabel(dlg, text="", image=bg)
-        background.place(relwidth=1, relheight=1)
-        dlg.bg_photo = bg
-
-        inputs = {}
-        y_offset = 16
+        self._pause_focus_guard()
+        normalized_card = None
         if card_id:
-            CTkLabel(dlg, text="Card ID").place(x=16, y=y_offset)
-            CTkLabel(dlg, text=card_id).place(x=140, y=y_offset)
-            y_offset += 40
+            raw_card = str(card_id).strip()
+            normalized_card = raw_card.zfill(8) if raw_card.isdigit() else raw_card
+        try:
+            dialog = AddStudentDialog(
+                self,
+                card_id=normalized_card,
+                duplicate_checker=self._student_id_or_phone_exists,
+                default_notes=default_notes,
+                on_submit=self._handle_add_student_submission,
+            )
+        except Exception:
+            self._resume_focus_guard()
+            raise
 
-        fields = [("student_id", "Student ID"), ("name", "Name"), ("phone", "Phone")]
-        for index, (field, label) in enumerate(fields):
-            y = y_offset + index * 40
-            CTkLabel(dlg, text=label).place(x=16, y=y)
-            entry = CTkEntry(dlg)
-            entry.place(x=140, y=y, width=200)
-            inputs[field] = entry
+        def _restore_focus_guard(event):
+            if event.widget is dialog:
+                self._resume_focus_guard()
 
-        def confirm():
-            values = {key: inputs[key].get().strip() for key in inputs}
-            if not all(values.values()):
-                messagebox.showerror("Missing", "Fill all fields", parent=dlg)
-                return
-            id_exists, phone_exists = self._student_id_or_phone_exists(values["student_id"], values["phone"])
-            if id_exists or phone_exists:
-                if id_exists and phone_exists:
-                    msg = "This student ID and phone number already exist."
-                elif id_exists:
-                    msg = "This student ID already exists."
-                else:
-                    msg = "This phone number already exists."
-                messagebox.showwarning("Duplicate", msg, parent=dlg)
-                return
-            cid = card_id
-            if not cid:
-                if not hasattr(self, "_unknown_counter"):
-                    unknowns = [
-                        int(str(r["card_id"]).split("Unknown ")[1])
-                        for r in self.sm.records
-                        if str(r.get("card_id", "")).startswith("Unknown ")
-                        and str(r["card_id"]).split("Unknown ")[1].isdigit()
-                    ]
-                    self._unknown_counter = max(unknowns, default=0)
-                self._unknown_counter += 1
-                cid = f"Unknown {self._unknown_counter}"
-            timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-            rec = {
-                "card_id": cid,
-                "student_id": values["student_id"],
-                "name": values["name"],
-                "phone": values["phone"],
-                "attendance": "attend",
-                "notes": default_notes,
-                "timestamp": timestamp,
-            }
-            if self.restrictions.get("exam"):
-                rec["exam"] = ""
-            if self.restrictions.get("homework"):
-                rec["homework"] = ""
-            self.sm.add_record(rec)
-            self._manual_additions += 1
-            self._update_record_cache(rec)
-            row_values = [
-                rec["card_id"],
-                rec["student_id"],
-                rec["name"],
-                rec["phone"],
-            ]
-            if self.restrictions.get("exam"):
-                row_values.append(rec.get("exam", ""))
-            if self.restrictions.get("homework"):
-                row_values.append(rec.get("homework", ""))
-            row_values.extend([rec["attendance"], rec["notes"], rec["timestamp"]])
-            if self.tree.exists(cid):
-                self.tree.item(cid, values=tuple(row_values))
-            else:
-                self.tree.insert("", "end", iid=cid, values=tuple(row_values))
-                if cid not in self._all_iids:
-                    self._all_iids.append(cid)
-            self._update_row(cid, rec["attendance"], rec["notes"], rec["timestamp"])
-            self._refresh_stats()
-            dlg.destroy()
-            self.scan_entry.focus_set()
+        dialog.bind("<Destroy>", _restore_focus_guard, add="+")
 
-        CTkButton(dlg, text="Confirm", command=confirm).place(x=80, y=height - 40, width=90)
-        CTkButton(dlg, text="Cancel", command=lambda: (dlg.destroy(), self.scan_entry.focus_set())).place(x=200, y=height - 40, width=90)
-        dlg.after(100, inputs["student_id"].focus_set)
+    def _handle_add_student_submission(self, *, card_id, values, default_notes):
+        cid = card_id
+        if cid:
+            cid = str(cid).strip()
+            if cid.isdigit():
+                cid = cid.zfill(8)
+        else:
+            cid = self._next_unknown_card_id()
+        timestamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+        rec = {
+            "card_id": cid,
+            "student_id": values["student_id"],
+            "name": values["name"],
+            "phone": values["phone"],
+            "attendance": "attend",
+            "notes": default_notes,
+            "timestamp": timestamp,
+        }
+        if self.restrictions.get("exam"):
+            rec["exam"] = ""
+        if self.restrictions.get("homework"):
+            rec["homework"] = ""
+        self.sm.add_record(rec)
+        self._manual_additions += 1
+        self._update_record_cache(rec)
+        row_values = [
+            rec["card_id"],
+            rec["student_id"],
+            rec["name"],
+            rec["phone"],
+        ]
+        if self.restrictions.get("exam"):
+            row_values.append(rec.get("exam", ""))
+        if self.restrictions.get("homework"):
+            row_values.append(rec.get("homework", ""))
+        row_values.extend([rec["attendance"], rec["notes"], rec["timestamp"]])
+        if self.tree.exists(cid):
+            self.tree.item(cid, values=tuple(row_values))
+        else:
+            self.tree.insert("", "end", iid=cid, values=tuple(row_values))
+            if cid not in self._all_iids:
+                self._all_iids.append(cid)
+        self._update_row(cid, rec["attendance"], rec["notes"], rec["timestamp"])
+        self._refresh_stats()
+        self.after(120, self.scan_entry.focus_set)
+        if hasattr(self.parent, "set_status"):
+            display_name = rec["name"].strip() or rec["student_id"]
+            self.parent.set_status(f"Student '{display_name}' added manually.")
+        return True
+
+    def _next_unknown_card_id(self):
+        if not hasattr(self, "_unknown_counter"):
+            existing = []
+            for record in self.sm.records:
+                card_value = str(record.get("card_id", ""))
+                if card_value.startswith("Unknown "):
+                    suffix = card_value.split("Unknown ", 1)[1]
+                    if suffix.isdigit():
+                        existing.append(int(suffix))
+            self._unknown_counter = max(existing, default=0)
+        self._unknown_counter += 1
+        return f"Unknown {self._unknown_counter}"
 
     def _on_end_scan(self):
         if getattr(self, "read_only", False):
             self._finalize_and_close(status_message=f"Session '{self.sm.name}' closed (view-only).")
             return
-        if self._summary_dialog and self._summary_dialog.winfo_exists():
-            self._summary_dialog.lift()
-            self._summary_dialog.focus_force()
-            return
-        summary = self._collect_session_summary()
-        self._summary_dialog = SessionSummaryDialog(
-            self,
-            self.sm.name,
-            summary,
-            self.sm.session_path,
-            callback=self._handle_summary_result
-        )
+        self._finalize_and_close()
 
     def _global_focus_in(self, _event):
-        if self.read_only:
+        if self._focus_reset_job is not None:
+            try:
+                self.after_cancel(self._focus_reset_job)
+            except Exception:
+                pass
+            self._focus_reset_job = None
+        if self.read_only or self._focus_guard_depth > 0:
             return
         widget = self.focus_get()
         if widget is None:
+            return
+        # Ignore focus changes coming from other toplevel dialogs (e.g. summary window).
+        try:
+            owning_top = widget.winfo_toplevel()
+        except Exception:
+            owning_top = None
+        if owning_top is not None and owning_top is not self:
             return
         if widget == self.scan_entry or widget in self._search_entries:
             return
@@ -2034,7 +2296,7 @@ class ScanWindow(CTkToplevel):
             if isinstance(w, CTkToplevel):
                 if widget == w or widget.winfo_toplevel() == w:
                     return
-        self.after_idle(self.scan_entry.focus_set)
+        self._focus_reset_job = self.after_idle(self._focus_scan_entry)
 
     def _student_id_or_phone_exists(self, student_id, phone):
         df = read_data(self.sm.session_path)
@@ -2051,6 +2313,44 @@ class ScanWindow(CTkToplevel):
 if __name__ == "__main__":
     app = App()
     app.mainloop()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,0 +1,22 @@
+{
+  "stage_options": [
+    "2nd",
+    "3rd"
+  ],
+  "center_options": [
+    "October",
+    "Ferdous",
+    "Helwan",
+    "Hadayek Helwan",
+    "Zayed",
+    "Haram",
+    "Dokki",
+    "Maadi",
+    "15 May"
+  ],
+  "restrictions": {
+    "exam": true,
+    "homework": true
+  },
+  "file_type": "xlsx"
+}
