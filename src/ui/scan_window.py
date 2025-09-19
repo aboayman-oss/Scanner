@@ -324,6 +324,7 @@ class ScanWindow(CTkToplevel):
         window.minsize(320, 420)
         window.resizable(False, True)
         window.transient(self)
+        window.attributes("-topmost", True)
         window.protocol("WM_DELETE_WINDOW", self.scan_focus_clear)
         window.bind("<Destroy>", self._handle_focus_window_destroy, add="+")
         container = CTkFrame(window, fg_color="transparent")
@@ -338,8 +339,10 @@ class ScanWindow(CTkToplevel):
             window.update_idletasks()
             width = max(window.winfo_width(), window.winfo_reqwidth(), 360)
             height = max(window.winfo_height(), window.winfo_reqheight(), 520)
-            x = self.winfo_rootx() + self.winfo_width() + 16
-            y = self.winfo_rooty() + 48
+            screen_width = window.winfo_screenwidth()
+            screen_height = window.winfo_screenheight()
+            x = (screen_width - width) // 2
+            y = (screen_height - height) // 2
             window.geometry(f"{int(width)}x{int(height)}+{int(x)}+{int(y)}")
         except Exception:
             pass
