@@ -374,13 +374,18 @@ class App(CTk):
         if not self.import_csv():
             return
 
-        self._session_setup = SessionSetupDialog(
-            self,
-            SETTINGS["stage_options"],
-            SETTINGS["center_options"],
-            has_data=self.data_df is not None,
-            callback=self._on_session_setup_finished,
-        )
+        try:
+            self._session_setup = SessionSetupDialog(
+                self,
+                SETTINGS["stage_options"],
+                SETTINGS["center_options"],
+                has_data=self.data_df is not None,
+                callback=self._on_session_setup_finished,
+            )
+        except Exception as e:
+            messagebox.showerror("Dialog Error", f"Failed to open session setup dialog: {e}")
+            self._session_setup = None
+            return
 
     def _on_session_setup_finished(self, payload):
         self._session_setup = None

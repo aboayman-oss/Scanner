@@ -32,7 +32,8 @@ class SessionSetupDialog(CTkToplevel):
         self.bind("<Return>", lambda _e: self._on_submit())
         self.bind("<Escape>", lambda _e: self._on_cancel())
         self.after(10, self._center_on_parent)
-        self.after(50, lambda: self.stage_cb.focus_set())
+        self._focus_after_id = None # Initialize to None
+        # self._focus_after_id = self.after(200, self._set_initial_focus)
 
     def _build_form(self):
         CTkLabel(
@@ -87,6 +88,10 @@ class SessionSetupDialog(CTkToplevel):
         self.geometry(f"{width}x{height}+{x}+{y}")
         bring_window_to_front(self)
 
+    def _set_initial_focus(self):
+        # Temporarily disable initial focus setting to debug
+        pass
+
     def _on_submit(self):
         stage = self.stage_cb.get().strip()
         center = self.center_cb.get().strip()
@@ -101,12 +106,18 @@ class SessionSetupDialog(CTkToplevel):
             "no": int(session_no),
             "name": f"{stage} {center} session {int(session_no)}"
         }
+        if self._focus_after_id:
+            self.after_cancel(self._focus_after_id)
+            self._focus_after_id = None
         if self.callback:
             self.callback(payload)
             self.callback = None
         self.destroy()
 
     def _on_cancel(self):
+        if self._focus_after_id:
+            self.after_cancel(self._focus_after_id)
+            self._focus_after_id = None
         if self.callback:
             self.callback(None)
             self.callback = None
