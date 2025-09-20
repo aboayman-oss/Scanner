@@ -31,9 +31,9 @@ class SessionSetupDialog(CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.bind("<Return>", lambda _e: self._on_submit())
         self.bind("<Escape>", lambda _e: self._on_cancel())
-        self.after(10, self._center_on_parent)
-        self._focus_after_id = None # Initialize to None
-        # self._focus_after_id = self.after(200, self._set_initial_focus)
+        self._focus_after_id = None
+        # Give time for widgets to be properly created and mapped
+        self.after(100, self._initialize_window)
 
     def _build_form(self):
         CTkLabel(
@@ -88,9 +88,11 @@ class SessionSetupDialog(CTkToplevel):
         self.geometry(f"{width}x{height}+{x}+{y}")
         bring_window_to_front(self)
 
-    def _set_initial_focus(self):
-        # Temporarily disable initial focus setting to debug
-        pass
+    def _initialize_window(self):
+        """Initialize window position and focus after widgets are mapped."""
+        self._center_on_parent()
+        if self.winfo_exists():
+            self.session_ent.focus_set()
 
     def _on_submit(self):
         stage = self.stage_cb.get().strip()

@@ -10,12 +10,13 @@ from customtkinter import (
     CTkComboBox,
     CTkEntry,
     CTkFrame,
+    CTkImage,
     CTkLabel,
     CTkRadioButton,
     CTkTabview,
     CTkToplevel,
 )
-from PIL import Image, ImageTk
+from PIL import Image
 
 from utils.helpers import (
     MAPPING_FILE,
@@ -27,6 +28,9 @@ from utils.helpers import (
     ensure_initial_size,
 )
 
+# Import read_data from its module
+from utils.helpers import read_data
+
 class SettingsWindow(CTkToplevel):
     mapping_placeholder = "-- Select --"
 
@@ -36,7 +40,8 @@ class SettingsWindow(CTkToplevel):
         self.minsize(*MIN_SETTINGS_SIZE)
 
         self.original_bg = Image.open(SETTINGS_BG_FILE)
-        self.bg_photo = ImageTk.PhotoImage(self.original_bg)
+        size = self.original_bg.size
+        self.bg_photo = CTkImage(light_image=self.original_bg, dark_image=self.original_bg, size=size)
         self.bg_label = CTkLabel(self, text="", image=self.bg_photo)
         self.bg_label.place(relwidth=1, relheight=1)
         self.bind("<Configure>", self._on_resize)
@@ -108,8 +113,8 @@ class SettingsWindow(CTkToplevel):
 
     def _on_resize(self, event):
         if event.widget is self:
-            resized = self.original_bg.resize((event.width, event.height), Image.LANCZOS)
-            self.bg_photo = ImageTk.PhotoImage(resized)
+            resized = self.original_bg.resize((event.width, event.height), Image.Resampling.LANCZOS)
+            self.bg_photo = CTkImage(light_image=resized, dark_image=resized, size=(event.width, event.height))
             self.bg_label.configure(image=self.bg_photo)
 
     def _build_template_tab(self):

@@ -7,8 +7,8 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from customtkinter import CTk, CTkButton, CTkFrame, CTkLabel
-from PIL import Image, ImageTk
+from customtkinter import CTk, CTkButton, CTkFrame, CTkLabel, CTkImage
+from PIL import Image
 
 from core.session_manager import SessionManager
 from ui.dialogs.add_student_dialog import AddStudentDialog
@@ -76,11 +76,19 @@ class App(CTk):
         header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         header.grid_columnconfigure(1, weight=1)
 
-        logo = Image.open(LOGO_FILE)
-        ratio = 56 / logo.width if logo.width else 1
-        logo = logo.resize((56, int(logo.height * ratio)), Image.LANCZOS)
-        self.logo_img = ImageTk.PhotoImage(logo)
-        CTkLabel(header, image=self.logo_img, text="").grid(row=0, column=0, sticky="w", padx=(0, 12))
+        try:
+            logo = Image.open(LOGO_FILE)
+            if logo.width > 0 and logo.height > 0:
+                target_width = 56
+                ratio = target_width / logo.width
+                target_height = max(1, int(logo.height * ratio))  # Ensure height is at least 1
+                logo = logo.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                self.logo_img = CTkImage(light_image=logo, dark_image=logo, size=(target_width, target_height))
+                CTkLabel(header, image=self.logo_img, text="").grid(row=0, column=0, sticky="w", padx=(0, 12))
+            else:
+                print("Warning: Logo image has invalid dimensions")
+        except Exception as e:
+            print(f"Warning: Could not load logo image: {e}")
 
         title_holder = CTkFrame(header, fg_color="transparent")
         title_holder.grid(row=0, column=1, sticky="w")
@@ -120,6 +128,53 @@ class App(CTk):
             )
             btn.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
             self.dashboard_buttons.append(btn)
+
+        # Recent sessions section
+        recent_frame = CTkFrame(actions_frame)
+        recent_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=12, pady=12)
+        recent_frame.grid_columnconfigure(0, weight=1)
+        
+        CTkLabel(
+            recent_frame,
+            text="Recent Sessions",
+            font=("Arial", 16, "bold"),
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 8))
+        
+        # Recent sessions tree view
+        from tkinter import ttk
+        self.recent_tree = ttk.Treeview(
+            recent_frame,
+            columns=("name", "modified"),
+            show="headings",
+            height=5
+        )
+        self.recent_tree.heading("name", text="Session Name")
+        self.recent_tree.heading("modified", text="Last Modified")
+        self.recent_tree.column("name", width=200)
+        self.recent_tree.column("modified", width=150)
+        self.recent_tree.grid(row=1, column=0, sticky="nsew", padx=12)
+        self.recent_tree.bind("<<TreeviewSelect>>", self._on_recent_select)
+
+        # Buttons for recent sessions
+        buttons_frame = CTkFrame(recent_frame, fg_color="transparent")
+        buttons_frame.grid(row=2, column=0, sticky="e", padx=12, pady=(8, 12))
+        
+        self.recent_open_button = CTkButton(
+            buttons_frame,
+            text="Open Session",
+            command=self._open_selected_session,
+            state="disabled"
+        )
+        self.recent_open_button.pack(side="left", padx=(0, 8))
+        
+        self.recent_reveal_button = CTkButton(
+            buttons_frame,
+            text="Show in Explorer",
+            command=self._reveal_selected_session,
+            state="disabled"
+        )
+        self.recent_reveal_button.pack(side="left")
 
         self.status_var = ctk.StringVar(value="Ready.")
         self.status_label = CTkLabel(

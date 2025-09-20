@@ -21,6 +21,7 @@ from utils.helpers import (
     ensure_initial_size,
     read_data,
 )
+from .focus_view_window import FocusViewWindow
 
 # --- Constants for the new Focus View Design ---
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets")
@@ -132,7 +133,7 @@ class ScanWindow(CTkToplevel):
         ensure_initial_size(self, min_size=MIN_SCAN_SIZE)
 
         if not self.read_only:
-            self.bind_all("<FocusIn>", self._global_focus_in, add="+ ")
+            self.bind_all("<FocusIn>", self._global_focus_in, add="+")
             self.scan_entry.focus_set()
 
     def toggle_fullscreen(self, event=None):
@@ -165,98 +166,36 @@ class ScanWindow(CTkToplevel):
 
     def scan_focus_create_ui(self, parent):
         """
-        Creates the complete UI for the new Material 3-style Focus View.
-        The UI is divided into three zones: Status, Details, and Actions.
+        Creates the Focus View UI using FocusViewWindow class.
         """
-        parent.configure(fg_color=(LIGHT_BG, DARK_BG))
-
-        # --- 1. Status Zone (Top) ---
-        # Displays student name, IDs, and a prominent status badge.
-        status_zone = CTkFrame(parent, fg_color="transparent")
-        status_zone.pack(fill="x", padx=20, pady=(20, 12))
-        status_zone.grid_columnconfigure(0, weight=1)
-
-        self.scan_focus_name_label = CTkLabel(status_zone, text="", font=("Roboto", 32, "bold"), text_color=(LIGHT_PRIMARY_TEXT, DARK_PRIMARY_TEXT), anchor="w")
-        self.scan_focus_name_label.grid(row=0, column=0, sticky="w")
-
-        self.scan_focus_id_label = CTkLabel(status_zone, text="", font=("Roboto", 12), text_color=(LIGHT_SECONDARY_TEXT, DARK_SECONDARY_TEXT), anchor="w")
-        self.scan_focus_id_label.grid(row=1, column=0, sticky="w", pady=(0, 8))
-
-        # Status Icon
-        self.scan_focus_status_icon = CTkLabel(status_zone, text="")
-        self.scan_focus_status_icon.grid(row=0, column=1, rowspan=2, sticky="e", padx=(12, 0))
-
-        # --- 2. Details Zone (Middle) ---
-        # Contains two cards for Homework and Exam status, and a notes textbox.
-        details_zone = CTkFrame(parent, fg_color="transparent")
-        details_zone.pack(fill="both", expand=True, padx=20, pady=8)
-
-        # Homework Card
-        self.hw_card = CTkFrame(details_zone, corner_radius=12, fg_color=(LIGHT_SURFACE, DARK_SURFACE))
-        self.hw_card.pack(fill="x", pady=(0, 8))
-        self.hw_card.grid_columnconfigure(1, weight=1)
-        self.hw_icon_label = CTkLabel(self.hw_card, text="")
-        self.hw_icon_label.grid(row=0, column=0, padx=(12, 8), pady=12)
-        CTkLabel(self.hw_card, text="Homework", font=("Roboto", 16, "bold")).grid(row=0, column=1, sticky="w")
-        self.hw_grade_label = CTkLabel(self.hw_card, text="", font=("Roboto", 14))
-        self.hw_grade_label.grid(row=0, column=2, sticky="e", padx=12)
-
-        # Exam Card
-        self.exam_card = CTkFrame(details_zone, corner_radius=12, fg_color=(LIGHT_SURFACE, DARK_SURFACE))
-        self.exam_card.pack(fill="x")
-        self.exam_card.grid_columnconfigure(1, weight=1)
-        self.exam_icon_label = CTkLabel(self.exam_card, text="")
-        self.exam_icon_label.grid(row=0, column=0, padx=(12, 8), pady=12)
-        CTkLabel(self.exam_card, text="Exam", font=("Roboto", 16, "bold")).grid(row=0, column=1, sticky="w")
-        self.exam_grade_label = CTkLabel(self.exam_card, text="", font=("Roboto", 14))
-        self.exam_grade_label.grid(row=0, column=2, sticky="e", padx=12)
-
-        # Notes Textbox
-        self.scan_focus_notes = CTkTextbox(details_zone, corner_radius=12, fg_color=(LIGHT_SURFACE, DARK_SURFACE), border_width=0, font=("Roboto", 14))
-        self.scan_focus_notes.pack(fill="both", expand=True, pady=(12, 0))
-        self.scan_focus_notes.insert("1.0", "Add notes here...")
-        self.scan_focus_notes.bind("<FocusIn>", self._on_notes_focus_in)
-        self.scan_focus_notes.bind("<FocusOut>", self._on_notes_focus_out)
-
-        # --- 3. Actions Zone (Bottom) ---
-        self.actions_zone = CTkFrame(parent, fg_color="transparent")
-        self.actions_zone.pack(fill="x", padx=20, pady=(12, 20))
-
-        # -- Button Definitions --
-        # Primary (Filled)
-        self._btn_complete = CTkButton(self.actions_zone, text="Complete & Attend", image=self._load_icon("task_alt.png"), command=self.scan_focus_on_completed)
-        self._btn_add_student = CTkButton(self.actions_zone, text="Add New Student", image=self._load_icon("person_add.png"), command=self.scan_focus_on_add_student)
-        
-        # Secondary (Outlined)
-        self._btn_override = CTkButton(self.actions_zone, text="Override & Attend", image=self._load_icon("gpp_good.png"), command=self.scan_focus_on_override, fg_color="transparent", border_width=1, border_color=(LIGHT_OUTLINE, DARK_OUTLINE))
-        
-        # Negative (Text Button)
-        self._btn_deny = CTkButton(self.actions_zone, text="Deny Entry", command=self.scan_focus_on_deny, fg_color="transparent", text_color=(LIGHT_ERROR, DARK_ERROR), hover=False)
-
-        self._btn_cancel = CTkButton(self.actions_zone, text="Cancel Attendance", command=self.scan_focus_on_cancel_attendance, fg_color="transparent", border_width=1, border_color=(LIGHT_OUTLINE, DARK_OUTLINE))
-
-        self.scan_focus_buttons = [self._btn_complete, self._btn_add_student, self._btn_override, self._btn_deny, self._btn_cancel]
-        
-        if self.read_only:
-            self.scan_focus_notes.configure(state="disabled")
-            for btn in self.scan_focus_buttons: btn.configure(state="disabled")
+        self.focus_view = FocusViewWindow(
+            parent,
+            read_only=getattr(self, 'read_only', False),
+            icon_cache=getattr(self, '_icon_cache', {}),
+            on_complete=self.scan_focus_on_completed,
+            on_add_student=self.scan_focus_on_add_student,
+            on_override=self.scan_focus_on_override,
+            on_deny=self.scan_focus_on_deny,
+            on_cancel=self.scan_focus_on_cancel_attendance
+        )
 
     def _on_notes_focus_in(self, event):
         self._pause_focus_guard()
-        if self.scan_focus_notes.get("1.0", "end-1c") == "Add notes here...":
-            self.scan_focus_notes.delete("1.0", "end")
-            self.scan_focus_notes.configure(text_color=(LIGHT_PRIMARY_TEXT, DARK_PRIMARY_TEXT))
+        if self.focus_view.notes.get("1.0", "end-1c") == "Add notes here...":
+            self.focus_view.notes.delete("1.0", "end")
+            self.focus_view.notes.configure(text_color=(LIGHT_PRIMARY_TEXT, DARK_PRIMARY_TEXT))
 
     def _on_notes_focus_out(self, event):
         self._resume_focus_guard()
-        if not self.scan_focus_notes.get("1.0", "end-1c"):
-            self.scan_focus_notes.configure(text_color="gray")
-            self.scan_focus_notes.insert("1.0", "Add notes here...")
+        if not self.focus_view.notes.get("1.0", "end-1c"):
+            self.focus_view.notes.configure(text_color="gray")
+            self.focus_view.notes.insert("1.0", "Add notes here...")
 
     def _ensure_scan_focus_window(self):
         """Ensures the Focus View window exists, creating it if necessary."""
-        if getattr(self, "scan_focus_window", None) and self.scan_focus_window.winfo_exists():
-            return self.scan_focus_window
+        window = getattr(self, "scan_focus_window", None)
+        if window is not None and window.winfo_exists():
+            return window
         
         window = CTkToplevel(self)
         window.withdraw()
@@ -266,7 +205,7 @@ class ScanWindow(CTkToplevel):
         window.transient(self)
         window.attributes("-topmost", True)
         window.protocol("WM_DELETE_WINDOW", self.scan_focus_clear)
-        window.bind("<Destroy>", lambda e: setattr(self, "scan_focus_window", None), add="+ ")
+        window.bind("<Destroy>", lambda e: setattr(self, "scan_focus_window", None), add="+")
 
         self.scan_focus_window = window
         self.scan_focus_create_ui(window)
@@ -289,27 +228,25 @@ class ScanWindow(CTkToplevel):
         ctx["status"] = status
 
         # Populate UI elements
-        self.scan_focus_name_label.configure(text=ctx.get("name") or "Unknown Student")
-        
+        self.focus_view.name_label.configure(text=ctx.get("name") or "Unknown Student")
         card_display_val = ctx.get('card_display', '') or ''
         card_display = str(card_display_val).replace('null', '').strip() or '--'
         student_id_val = ctx.get('student_id', '') or ''
         student_id = str(student_id_val).replace('null', '').strip() or '--'
-        
         id_text = f"Student ID: {student_id}  •  Card ID: {card_display}"
-        self.scan_focus_id_label.configure(text=id_text)
+        self.focus_view.id_label.configure(text=id_text)
 
         # Set notes
-        if not self.read_only: self.scan_focus_notes.configure(state="normal")
-        self.scan_focus_notes.delete("1.0", "end")
+        if not self.read_only: self.focus_view.notes.configure(state="normal")
+        self.focus_view.notes.delete("1.0", "end")
         existing_notes = ctx.get("existing_notes", "")
         if existing_notes:
-            self.scan_focus_notes.insert("1.0", existing_notes)
-            self.scan_focus_notes.configure(text_color=(LIGHT_PRIMARY_TEXT, DARK_PRIMARY_TEXT))
+            self.focus_view.notes.insert("1.0", existing_notes)
+            self.focus_view.notes.configure(text_color=(LIGHT_PRIMARY_TEXT, DARK_PRIMARY_TEXT))
         else:
-            self.scan_focus_notes.configure(text_color="gray")
-            self.scan_focus_notes.insert("1.0", "Add notes here...")
-        if self.read_only: self.scan_focus_notes.configure(state="disabled")
+            self.focus_view.notes.configure(text_color="gray")
+            self.focus_view.notes.insert("1.0", "Add notes here...")
+        if self.read_only: self.focus_view.notes.configure(state="disabled")
 
         # Filter the main table view
         focus_iids = ctx.get("focus_iids") or []
@@ -331,7 +268,7 @@ class ScanWindow(CTkToplevel):
 
         # 1. Update Status Icon
         style = STATUS_STYLES.get(kind, STATUS_STYLES["ok"])
-        self.scan_focus_status_icon.configure(image=self._load_icon(style["icon"], size=(48, 48)))
+        self.focus_view.status_icon.configure(image=self._load_icon(style["icon"], size=(48, 48)))
 
         # 2. Update Details Cards (Homework & Exam)
         missing_tasks = context.get("missing_tasks", [])
@@ -344,7 +281,7 @@ class ScanWindow(CTkToplevel):
 
         # Homework
         hw_missing = "homework" in missing_tasks
-        self.hw_icon_label.configure(image=problem_icon if hw_missing else success_icon)
+        self.focus_view.hw_icon_label.configure(image=problem_icon if hw_missing else success_icon)
         hw_grade = context.get("homework", "")
         hw_text = ""
         if hw_grade:
@@ -353,12 +290,12 @@ class ScanWindow(CTkToplevel):
                 hw_text += " (Fail)"
         else:
             hw_text = "Not Submitted"
-        self.hw_grade_label.configure(text=hw_text)
-        self.hw_card.configure(fg_color=problem_color if hw_missing else success_color)
+        self.focus_view.hw_grade_label.configure(text=hw_text)
+        self.focus_view.hw_card.configure(fg_color=problem_color if hw_missing else success_color)
 
         # Exam
         exam_missing = "exam" in missing_tasks
-        self.exam_icon_label.configure(image=problem_icon if exam_missing else success_icon)
+        self.focus_view.exam_icon_label.configure(image=problem_icon if exam_missing else success_icon)
         exam_grade = context.get("exam", "")
         exam_text = ""
         if exam_grade:
@@ -367,27 +304,29 @@ class ScanWindow(CTkToplevel):
                 exam_text += " (Fail)"
         else:
             exam_text = "Not Submitted"
-        self.exam_grade_label.configure(text=exam_text)
-        self.exam_card.configure(fg_color=problem_color if exam_missing else success_color)
+        self.focus_view.exam_grade_label.configure(text=exam_text)
+        self.focus_view.exam_card.configure(fg_color=problem_color if exam_missing else success_color)
 
         # 3. Update Action Buttons
         self._update_action_buttons(kind, context)
 
     def _update_action_buttons(self, kind, context):
         """Shows and hides the correct action buttons based on the status."""
-        for btn in self.scan_focus_buttons: btn.pack_forget()
+        for btn in self.focus_view.buttons:
+            btn.pack_forget()
 
         buttons_to_show = []
         if kind == "not_found":
-            buttons_to_show = [self._btn_add_student]
+            buttons_to_show = [self.focus_view.btn_add_student]
         elif kind in {"missing_exam", "missing_homework"}:
-            buttons_to_show = [self._btn_deny, self._btn_override, self._btn_complete]
+            buttons_to_show = [self.focus_view.btn_deny, self.focus_view.btn_override, self.focus_view.btn_complete]
         elif kind == "ok" and context.get("already_attended"):
-            buttons_to_show = [self._btn_cancel]
-        
+            buttons_to_show = [self.focus_view.btn_cancel]
+
         # Pack buttons with primary actions last to appear on the right
-        for btn in buttons_to_show: btn.pack(side="left", fill="x", expand=True, padx=4)
-        
+        for btn in buttons_to_show:
+            btn.pack(side="left", fill="x", expand=True, padx=4)
+
         # Special case for a single primary button to be centered
         if len(buttons_to_show) == 1:
             buttons_to_show[0].pack(side="top", fill="x", expand=True, padx=4)
@@ -397,11 +336,11 @@ class ScanWindow(CTkToplevel):
         self.scan_focus_cancel_timer()
         self.scan_focus_ctx = None
         
-        if hasattr(self, "scan_focus_notes"):
-            if not self.read_only: self.scan_focus_notes.configure(state="normal")
-            self.scan_focus_notes.delete("1.0", "end")
-            self.scan_focus_notes.configure(text_color="gray")
-            self.scan_focus_notes.insert("1.0", "Add notes here...")
+        if hasattr(self, "focus_view"):
+            if not self.read_only: self.focus_view.notes.configure(state="normal")
+            self.focus_view.notes.delete("1.0", "end")
+            self.focus_view.notes.configure(text_color="gray")
+            self.focus_view.notes.insert("1.0", "Add notes here...")
 
         self.scan_restore_from_focus()
         
@@ -437,44 +376,55 @@ class ScanWindow(CTkToplevel):
         if self._focus_guard_depth > 0: self._focus_guard_depth -= 1
 
     def _build_ui(self):
-        top_bar = CTkFrame(self, fg_color="transparent")
-        top_bar.pack(fill="x", padx=12, pady=(16, 8))
+        # Top Bar with Material 3-inspired session title
+        top_bar = CTkFrame(self, fg_color=("#e3eafc", "#232a36"), corner_radius=16)
+        top_bar.pack(fill="x", padx=24, pady=(24, 16))
         top_bar.grid_columnconfigure(1, weight=1)
 
+        # Session Title - prominent, large, bold, Material color
+        session_text = f"Session: {self.sm.name}" + (" (read-only)" if self.read_only else "")
+        session_icon = self._load_icon("group.png", size=(32, 32))
+        session_title_frame = CTkFrame(top_bar, fg_color="transparent")
+        session_title_frame.grid(row=0, column=1, sticky="w", padx=(0, 0), pady=(0, 0))
+        CTkLabel(session_title_frame, image=session_icon, text="", width=36).pack(side="left", padx=(0, 8))
+        CTkLabel(session_title_frame, text=session_text, font=("Arial", 22, "bold"), text_color=("#1b1c1e", "#e3e2e6")).pack(side="left")
+
+        # Scan Entry Block with increased spacing
         scan_block = CTkFrame(top_bar, fg_color="transparent")
-        scan_block.grid(row=0, column=0, sticky="w")
-        CTkLabel(scan_block, text="Scan Entry", font=("Arial", 12, "bold")).pack(anchor="w")
-        self.scan_entry = CTkEntry(scan_block, width=240, placeholder_text="Scan card ID")
-        self.scan_entry.pack(anchor="w", pady=(4, 0))
+        scan_block.grid(row=0, column=0, sticky="w", padx=(0, 24))
+        CTkLabel(scan_block, text="Scan Entry", font=("Arial", 14, "bold"), text_color=("#00639c", "#a9c8e7")).pack(anchor="w", pady=(0, 8))
+        self.scan_entry = CTkEntry(scan_block, width=260, height=36, placeholder_text="Scan card ID")
+        self.scan_entry.pack(anchor="w", pady=(0, 8))
         self.scan_entry.bind("<Return>", lambda _e: self.scan_on_scan())
 
-        self.pb = CTkProgressBar(scan_block, mode="indeterminate", width=240)
-        self.pb.pack(anchor="w", pady=(6, 0)); self.pb.stop()
+        self.pb = CTkProgressBar(scan_block, mode="indeterminate", width=260)
+        self.pb.pack(anchor="w", pady=(0, 0)); self.pb.stop()
 
         if self.read_only:
             self.scan_entry.configure(state="disabled"); self.scan_entry.unbind("<Return>"); scan_block.grid_remove()
 
-        session_text = f"Session: {self.sm.name}" + (" (read-only)" if self.read_only else "")
-        CTkLabel(top_bar, text=session_text, font=("Arial", 12)).grid(row=0, column=1, sticky="w", padx=18)
+        # End Session Button with more space
+        self.end_button = CTkButton(top_bar, text="End Session" if not self.read_only else "Close", command=self._on_end_scan, width=120, height=36)
+        self.end_button.grid(row=0, column=2, sticky="e", padx=(24, 0))
 
-        self.end_button = CTkButton(top_bar, text="End Session" if not self.read_only else "Close", command=self._on_end_scan)
-        self.end_button.grid(row=0, column=2, sticky="e")
-
+        # Stats strip with more margin
         self._build_stats_strip()
 
+        # Search bar with increased padding
         search_frame = CTkFrame(self, fg_color="transparent")
-        search_frame.pack(fill="x", padx=12, pady=(0, 10))
+        search_frame.pack(fill="x", padx=24, pady=(0, 16))
         self.search_var = ctk.StringVar()
-        search_entry = CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search by card, ID, name, phone")
-        search_entry.grid(row=0, column=0, sticky="ew", padx=5); search_frame.grid_columnconfigure(0, weight=1)
+        search_entry = CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search by card, ID, name, phone", width=320, height=36)
+        search_entry.grid(row=0, column=0, sticky="ew", padx=8, pady=8); search_frame.grid_columnconfigure(0, weight=1)
         self.search_var.trace_add("write", self._on_search_change)
         self._search_entries.append(search_entry)
         search_entry.bind("<FocusIn>", lambda _e: self._pause_focus_guard())
         search_entry.bind("<FocusOut>", lambda _e: self._resume_focus_guard())
         self.smart_search_entry = search_entry
 
+        # Main content area with more padding
         scan_main_content = CTkFrame(self, fg_color="transparent")
-        scan_main_content.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        scan_main_content.pack(fill="both", expand=True, padx=24, pady=(0, 24))
         scan_main_content.grid_rowconfigure(0, weight=1); scan_main_content.grid_columnconfigure(0, weight=1)
 
         tree_container = CTkFrame(scan_main_content, fg_color="transparent")
@@ -507,7 +457,7 @@ class ScanWindow(CTkToplevel):
             except Exception: pass
             self.scan_focus_timer = None
 
-    def scan_focus_schedule_clear(self, delay=3000):
+    def scan_focus_schedule_clear(self, delay=1500):
         self.scan_focus_cancel_timer()
         self.scan_focus_timer = self.after(delay, self.scan_focus_clear)
 
@@ -567,7 +517,8 @@ class ScanWindow(CTkToplevel):
     def scan_describe_tasks(self, tasks):
         if not tasks: return ""
         labels = {"exam": "Exam", "homework": "Homework"}
-        mapped = [labels.get(task, task.title()) for task in tasks]
+        mapped = [labels.get(task, str(task).title()) for task in tasks]
+        if not mapped: return ""
         return mapped[0] if len(mapped) == 1 else " & ".join(mapped)
 
     def scan_append_notes(self, original, addition):
@@ -577,9 +528,11 @@ class ScanWindow(CTkToplevel):
         return f"{original_clean.rstrip()}\n{addition_clean}"
 
     def scan_collect_new_note(self):
-        if not hasattr(self, "scan_focus_notes"): return ""
-        try: typed = self.scan_focus_notes.get("1.0", "end-1c").strip()
-        except Exception: return ""
+        if not hasattr(self, "focus_view"): return ""
+        try:
+            typed = self.focus_view.notes.get("1.0", "end-1c").strip()
+        except Exception:
+            return ""
         if typed == "Add notes here...": return ""
         return self._clean_value(typed)
 
@@ -804,8 +757,13 @@ class ScanWindow(CTkToplevel):
         if status_message is None: status_message = f"Session '{self.sm.name}' saved and closed."
         summary, session_name, session_path, parent, read_only = self._build_summary_payload(), self.sm.name, getattr(self.sm, "session_path", None), self.parent, getattr(self, "read_only", False)
         
-        if getattr(self, "scan_focus_window", None): self.scan_focus_window.destroy()
-        if self.winfo_exists(): self.destroy()
+        window = getattr(self, "scan_focus_window", None)
+        if window is not None and hasattr(window, "winfo_exists") and window.winfo_exists():
+            try: window.destroy()
+            except Exception: pass
+        if hasattr(self, "winfo_exists") and self.winfo_exists():
+            try: self.destroy()
+            except Exception: pass
         
         if hasattr(parent, "_refresh_recent_sessions"): parent._refresh_recent_sessions()
         if getattr(parent, "past_sessions_window", None) and parent.past_sessions_window.winfo_exists(): parent.past_sessions_window.refresh()
@@ -869,7 +827,7 @@ class ScanWindow(CTkToplevel):
             normalized_card = raw_card.zfill(8) if raw_card.isdigit() else raw_card
         
         dialog = AddStudentDialog(self, card_id=normalized_card, duplicate_checker=self._student_id_or_phone_exists, default_notes=default_notes, on_submit=self._handle_add_student_submission)
-        dialog.bind("<Destroy>", lambda e: self._resume_focus_guard(), add="+ ")
+        dialog.bind("<Destroy>", lambda e: self._resume_focus_guard(), add="+")
 
     def _handle_add_student_submission(self, *, card_id, values, default_notes):
         cid = str(card_id).strip() if card_id else self._next_unknown_card_id()
