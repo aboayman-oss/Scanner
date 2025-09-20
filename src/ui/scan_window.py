@@ -48,6 +48,19 @@ DARK_WARNING = "#f9d694"
 DARK_ERROR = "#f2b8b5"
 DARK_INFO = "#a9c8e7"
 DARK_OUTLINE = "#8e9099"
+LIGHT_INFO = "#00639c"
+LIGHT_OUTLINE = "#73777f"
+
+# Dark Mode
+DARK_BG = "#1d1b20"
+DARK_SURFACE = "#141218"
+DARK_PRIMARY_TEXT = "#e3e2e6"
+DARK_SECONDARY_TEXT = "#cac4d0"
+DARK_SUCCESS = "#b5d3a7"
+DARK_WARNING = "#f9d694"
+DARK_ERROR = "#f2b8b5"
+DARK_INFO = "#a9c8e7"
+DARK_OUTLINE = "#8e9099"
 
 # -- Status Definitions --
 STATUS_STYLES = {
@@ -135,6 +148,10 @@ class ScanWindow(CTkToplevel):
         if not self.read_only:
             self.bind_all("<FocusIn>", self._global_focus_in, add="+")
             self.scan_entry.focus_set()
+
+    def _on_filter_click(self):
+        # TODO: Implement dropdown for status filtering (Attended, Absent, Missing Exam, etc.)
+        messagebox.showinfo("Filter", "Advanced filtering will be implemented here.", parent=self)
 
     def toggle_fullscreen(self, event=None):
         self.attributes("-fullscreen", not self.attributes("-fullscreen"))
@@ -375,54 +392,65 @@ class ScanWindow(CTkToplevel):
     def _resume_focus_guard(self):
         if self._focus_guard_depth > 0: self._focus_guard_depth -= 1
 
+
     def _build_ui(self):
-        # Top Bar with Material 3-inspired session title
-        top_bar = CTkFrame(self, fg_color=("#e3eafc", "#232a36"), corner_radius=16)
+        # --- Material 3 Inspired Header ---
+        top_bar = CTkFrame(self, fg_color=("#f8faff", "#1d1b20"), corner_radius=16)
         top_bar.pack(fill="x", padx=24, pady=(24, 16))
+        top_bar.grid_columnconfigure(0, weight=0)
         top_bar.grid_columnconfigure(1, weight=1)
+        top_bar.grid_columnconfigure(2, weight=0)
+        top_bar.grid_columnconfigure(3, weight=0)
 
-        # Session Title - prominent, large, bold, Material color
-        session_text = f"Session: {self.sm.name}" + (" (read-only)" if self.read_only else "")
-        session_icon = self._load_icon("group.png", size=(32, 32))
-        session_title_frame = CTkFrame(top_bar, fg_color="transparent")
-        session_title_frame.grid(row=0, column=1, sticky="w", padx=(0, 0), pady=(0, 0))
-        CTkLabel(session_title_frame, image=session_icon, text="", width=36).pack(side="left", padx=(0, 8))
-        CTkLabel(session_title_frame, text=session_text, font=("Arial", 22, "bold"), text_color=("#1b1c1e", "#e3e2e6")).pack(side="left")
-
-        # Scan Entry Block with increased spacing
-        scan_block = CTkFrame(top_bar, fg_color="transparent")
-        scan_block.grid(row=0, column=0, sticky="w", padx=(0, 24))
-        CTkLabel(scan_block, text="Scan Entry", font=("Arial", 14, "bold"), text_color=("#00639c", "#a9c8e7")).pack(anchor="w", pady=(0, 8))
-        self.scan_entry = CTkEntry(scan_block, width=260, height=36, placeholder_text="Scan card ID")
-        self.scan_entry.pack(anchor="w", pady=(0, 8))
+        # --- Scan Entry (Left) ---
+        scan_icon = self._load_icon("scan.png", size=(28, 28))
+        scan_entry_frame = CTkFrame(top_bar, fg_color="transparent")
+        scan_entry_frame.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        scan_icon_label = CTkLabel(scan_entry_frame, image=scan_icon, text="", width=32)
+        scan_icon_label.pack(side="left", padx=(0, 8))
+        self.scan_entry = CTkEntry(scan_entry_frame, width=260, height=44, placeholder_text="Scan card ID (place card here)")
+        self.scan_entry.pack(side="left", padx=(0, 0), pady=0)
         self.scan_entry.bind("<Return>", lambda _e: self.scan_on_scan())
+        self.pb = CTkProgressBar(scan_entry_frame, mode="indeterminate", width=260)
+        self.pb.pack_forget()
 
-        self.pb = CTkProgressBar(scan_block, mode="indeterminate", width=260)
-        self.pb.pack(anchor="w", pady=(0, 0)); self.pb.stop()
-
+        # --- Add Student Button (Circular, Icon Only) ---
+        add_icon = self._load_icon("person_add.png", size=(32, 32))
+        self.add_student_button = CTkButton(top_bar, width=44, height=44, text="", image=add_icon, fg_color=("#e3eafc", "#232a36"), corner_radius=22, command=self._on_add_student_flow)
+        self.add_student_button.grid(row=0, column=1, sticky="w", padx=(0, 12))
         if self.read_only:
-            self.scan_entry.configure(state="disabled"); self.scan_entry.unbind("<Return>"); scan_block.grid_remove()
+            self.scan_entry.configure(state="disabled"); self.scan_entry.unbind("<Return>"); self.add_student_button.grid_remove()
 
-        # End Session Button with more space
-        self.end_button = CTkButton(top_bar, text="End Session" if not self.read_only else "Close", command=self._on_end_scan, width=120, height=36)
-        self.end_button.grid(row=0, column=2, sticky="e", padx=(24, 0))
-
-        # Stats strip with more margin
-        self._build_stats_strip()
-
-        # Search bar with increased padding
-        search_frame = CTkFrame(self, fg_color="transparent")
-        search_frame.pack(fill="x", padx=24, pady=(0, 16))
+        # --- Search & Filter (Center/Right) ---
+        search_filter_frame = CTkFrame(top_bar, fg_color="transparent")
+        search_filter_frame.grid(row=0, column=2, sticky="ew", padx=(0, 12))
         self.search_var = ctk.StringVar()
-        search_entry = CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search by card, ID, name, phone", width=320, height=36)
-        search_entry.grid(row=0, column=0, sticky="ew", padx=8, pady=8); search_frame.grid_columnconfigure(0, weight=1)
+        search_icon = self._load_icon("search.png", size=(24, 24))
+        search_entry_frame = CTkFrame(search_filter_frame, fg_color="transparent")
+        search_entry_frame.pack(side="left", padx=(0, 0))
+        search_icon_label = CTkLabel(search_entry_frame, image=search_icon, text="", width=28)
+        search_icon_label.pack(side="left", padx=(0, 6))
+        search_entry = CTkEntry(search_entry_frame, textvariable=self.search_var, width=220, height=44, placeholder_text="Search by name, ID, card, or phone")
+        search_entry.pack(side="left")
         self.search_var.trace_add("write", self._on_search_change)
         self._search_entries.append(search_entry)
         search_entry.bind("<FocusIn>", lambda _e: self._pause_focus_guard())
         search_entry.bind("<FocusOut>", lambda _e: self._resume_focus_guard())
         self.smart_search_entry = search_entry
+        filter_icon = self._load_icon("filter.png", size=(28, 28))
+        self.filter_button = CTkButton(search_filter_frame, width=44, height=44, text="", image=filter_icon, fg_color=("#e3eafc", "#232a36"), corner_radius=22, command=self._on_filter_click)
+        self.filter_button.pack(side="left", padx=(8, 0))
 
-        # Main content area with more padding
+        # --- Actions (Far Right) ---
+        actions_frame = CTkFrame(top_bar, fg_color="transparent")
+        actions_frame.grid(row=0, column=3, sticky="e", padx=(0, 0))
+        self.end_button = CTkButton(actions_frame, text="End Session" if not self.read_only else "Close", command=self._on_end_scan, width=120, height=44, fg_color=("#00639c", "#a9c8e7"), text_color=("#fff", "#232a36"), font=("Arial", 14, "bold"))
+        self.end_button.pack(side="right", padx=(0, 0))
+
+        # --- Stats strip ---
+        self._build_stats_strip()
+
+        # --- Main content area ---
         scan_main_content = CTkFrame(self, fg_color="transparent")
         scan_main_content.pack(fill="both", expand=True, padx=24, pady=(0, 24))
         scan_main_content.grid_rowconfigure(0, weight=1); scan_main_content.grid_columnconfigure(0, weight=1)
@@ -444,12 +472,6 @@ class ScanWindow(CTkToplevel):
         scrollbar.grid(row=0, column=1, sticky="ns"); self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.bind("<Double-1>", self.scan_on_row_double_click)
         if self.read_only: self.tree.unbind("<Double-1>")
-
-        self.control_frame = CTkFrame(self, fg_color="transparent")
-        self.control_frame.pack(fill="x", padx=12, pady=(0, 12))
-        self.add_student_button = CTkButton(self.control_frame, text="Add Student", command=self._on_add_student_flow)
-        self.add_student_button.pack(side="left")
-        if self.read_only: self.control_frame.pack_forget()
 
     def scan_focus_cancel_timer(self):
         if self.scan_focus_timer is not None:
@@ -679,17 +701,55 @@ class ScanWindow(CTkToplevel):
             self.scan_focus_clear()
 
     def _build_stats_strip(self):
-        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=10)
-        self.stats_frame.pack(fill="x", padx=12, pady=(0, 10))
-        stats = [("Total Rows", self.stats_vars["total"]),( "Attended", self.stats_vars["attended"]),( "Attendance %", self.stats_vars["percent"])]
-        if self.restrictions.get("exam"): stats.append(("Missing Exam", self.stats_vars["missing_exam"]))
-        if self.restrictions.get("homework"): stats.append(("Missing H.W.", self.stats_vars["missing_hw"]))
-        for idx, (label, var) in enumerate(stats):
-            block = CTkFrame(self.stats_frame, fg_color="transparent")
-            block.grid(row=0, column=idx, sticky="w", padx=(12 if idx == 0 else 8, 8), pady=10)
-            CTkLabel(block, text=label, font=("Arial", 11, "bold")).pack(anchor="w")
-            CTkLabel(block, textvariable=var, font=("Arial", 16)).pack(anchor="w")
+        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=16)
+        self.stats_frame.pack(fill="x", padx=24, pady=(0, 18))
+
+        # Card definitions: label, var, icon, is_progress
+        card_defs = [
+            {"label": "Total Rows", "var": self.stats_vars["total"], "icon": "group.png", "is_progress": False},
+            {"label": "Attended", "var": self.stats_vars["attended"], "icon": "check_circle.png", "is_progress": False},
+            {"label": "Attendance %", "var": self.stats_vars["percent"], "icon": "percent.png", "is_progress": True},
+        ]
+        if self.restrictions.get("exam"):
+            card_defs.append({"label": "Missing Exam", "var": self.stats_vars["missing_exam"], "icon": "warning.png", "is_progress": False})
+        if self.restrictions.get("homework"):
+            card_defs.append({"label": "Missing H.W.", "var": self.stats_vars["missing_hw"], "icon": "warning.png", "is_progress": False})
+
+        for idx, card in enumerate(card_defs):
+            card_frame = CTkFrame(
+                self.stats_frame,
+                fg_color=("#ffffff", "#232a36"),
+                corner_radius=14,
+                width=140,
+                height=90
+            )
+            card_frame.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 16, 0), pady=8)
             self.stats_frame.grid_columnconfigure(idx, weight=1)
+
+            # Icon
+            icon_img = self._load_icon(card["icon"], size=(32, 32))
+            icon_label = CTkLabel(card_frame, image=icon_img, text="", width=36)
+            icon_label.pack(side="top", anchor="center", pady=(10, 0))
+
+            # Number or Progress
+            if card["is_progress"]:
+                # Attendance % as circular progress bar
+                percent_str = self.stats_vars["percent"].get().replace("%", "")
+                try:
+                    percent_val = float(percent_str) / 100.0
+                except Exception:
+                    percent_val = 0.0
+                progress_frame = CTkFrame(card_frame, fg_color="transparent")
+                progress_frame.pack(side="top", anchor="center", pady=(2, 0))
+                progress = CTkProgressBar(progress_frame, width=48, height=8)
+                progress.set(percent_val)
+                progress.pack(side="top", anchor="center")
+                CTkLabel(card_frame, textvariable=self.stats_vars["percent"], font=("Arial", 18, "bold"), text_color=("#00639c", "#a9c8e7")).pack(side="top", anchor="center", pady=(2, 0))
+            else:
+                CTkLabel(card_frame, textvariable=card["var"], font=("Arial", 22, "bold"), text_color=("#1b1c1e", "#e3e2e6")).pack(side="top", anchor="center", pady=(2, 0))
+
+            # Label
+            CTkLabel(card_frame, text=card["label"], font=("Arial", 11), text_color=("#43474e", "#cac4d0")).pack(side="top", anchor="center", pady=(2, 8))
 
     def _apply_treeview_style(self):
         mode = ctk.get_appearance_mode()
