@@ -82,9 +82,9 @@ class FocusViewWindow:
 
         self.btn_complete = CTkButton(actions_zone, text="Complete & Attend", image=self._load_icon("task_alt.png"), command=self._on_complete)
         self.btn_add_student = CTkButton(actions_zone, text="Add New Student", image=self._load_icon("person_add.png"), command=self._on_add_student)
-        self.btn_override = CTkButton(actions_zone, text="Override & Attend", image=self._load_icon("gpp_good.png"), command=self._on_override)
-        self.btn_deny = CTkButton(actions_zone, text="Deny Entry", command=self._on_deny)
-        self.btn_cancel = CTkButton(actions_zone, text="Cancel Attendance", command=self._on_cancel)
+        self.btn_override = CTkButton(actions_zone, text="Attend Anyway", image=self._load_icon("gpp_good.png"), command=self._on_override)
+        self.btn_deny = CTkButton(actions_zone, text="Deny Entry", image=self._load_icon("block.png"), command=self._on_deny)
+        self.btn_cancel = CTkButton(actions_zone, text="Cancel Attendance", image=self._load_icon("block.png"), command=self._on_cancel)
 
         self.buttons = [self.btn_complete, self.btn_add_student, self.btn_override, self.btn_deny, self.btn_cancel]
         for btn in self.buttons:

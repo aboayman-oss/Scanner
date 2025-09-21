@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+call .venv\Scripts\activate.bat
+
 REM Clean previous PyInstaller outputs
 if exist dist rmdir /s /q dist
 if exist build rmdir /s /q build

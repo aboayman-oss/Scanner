@@ -93,6 +93,19 @@ STATUS_STYLES = {
 
 
 class ScanWindow(CTkToplevel):
+    def _reset_treeview_sort(self):
+        """Restore Treeview rows to their original order."""
+        self._tree_sort_column = None
+        self._tree_sort_reverse = False
+        # Detach all
+        for iid in self._all_iids:
+            if self.tree.exists(iid):
+                self.tree.detach(iid)
+        # Re-attach in original order
+        for iid in self._all_iids:
+            if self.tree.exists(iid):
+                self.tree.reattach(iid, '', 'end')
+
     def __init__(self, parent, session_mgr, read_only=False):
         super().__init__(parent)
         self.parent = parent
@@ -180,6 +193,14 @@ class ScanWindow(CTkToplevel):
         y = by - self.winfo_rooty()
         panel.place(x=x, y=y)
 
+        # Top bar with X button
+        top_bar = CTkFrame(panel, fg_color="transparent")
+        top_bar.pack(fill="x", padx=0, pady=(0,0))
+        CTkLabel(top_bar, text="Filters", font=("Arial", 14, "bold"), anchor="w").pack(side="left", padx=(12,0), pady=(10,0))
+        x_icon = self._load_icon("close.png", size=(20, 20))
+        dismiss_btn = CTkButton(top_bar, text="", image=x_icon, width=32, height=32, fg_color="transparent", command=self._hide_filter_panel)
+        dismiss_btn.pack(side="right", padx=(0,8), pady=(10,0))
+
         # Attendance Status (Radio)
         CTkLabel(panel, text="Attendance Status", font=("Arial", 12, "bold"), anchor="w").pack(anchor="w", padx=12, pady=(10,0))
         att_frame = CTkFrame(panel, fg_color="transparent")
@@ -205,21 +226,15 @@ class ScanWindow(CTkToplevel):
         clear_btn = CTkButton(panel, text="Clear Filters", fg_color=("#e3eafc", "#232a36"), command=self._clear_filters)
         clear_btn.pack(fill="x", padx=12, pady=(10,10))
 
-        # Dismiss on click-away
-        self.bind_all("<Button-1>", self._on_click_away, add="+")
         self._filter_panel.lift()
 
     def _hide_filter_panel(self):
         if self._filter_panel and self._filter_panel.winfo_exists():
             self._filter_panel.place_forget()
             self._filter_panel.destroy()
-        self.unbind_all("<Button-1>")
 
     def _on_click_away(self, event):
-        # Only close if click is outside panel and filter button
-        widget = event.widget
-        if widget not in {self._filter_panel, self.filter_button}:
-            self._hide_filter_panel()
+        pass  # Removed click-away dismissal for filter panel
 
     def _on_filter_change(self):
         self._filter_active = self._is_filter_active()
@@ -248,6 +263,61 @@ class ScanWindow(CTkToplevel):
         # Change icon to filled if filter active
         icon_name = "filter.png" if not self._filter_active else "filter_filled.png"
         self.filter_button.configure(image=self._load_icon(icon_name, size=(28, 28)))
+
+    # --------------------------------------------------------------------------
+    # Modern: Edit Notes Modal on Treeview Right-Click
+    # --------------------------------------------------------------------------
+    def _on_tree_right_click(self, event):
+        # Get row under mouse
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return
+        # Open modal dialog for editing notes
+        self._open_edit_notes_modal(iid)
+
+    def _open_edit_notes_modal(self, iid):
+        # Get current notes
+        current_notes = self.tree.set(iid, "notes")
+        student_name = self.tree.set(iid, "name") or "Student"
+        modal = CTkToplevel(self)
+        modal.title(f"Edit Notes - {student_name}")
+        modal.geometry("420x260")
+        modal.transient(self)
+        modal.grab_set()
+        modal.resizable(False, False)
+        modal.attributes("-topmost", True)
+
+        # Modal styling
+        frame = CTkFrame(modal, fg_color=(LIGHT_SURFACE, DARK_SURFACE), corner_radius=16)
+        frame.pack(fill="both", expand=True, padx=18, pady=18)
+
+        CTkLabel(frame, text=f"Edit Notes for {student_name}", font=("Arial", 15, "bold"), anchor="w").pack(anchor="w", pady=(0,8))
+        notes_box = CTkTextbox(frame, width=360, height=90, font=("Arial", 13), corner_radius=10)
+        notes_box.pack(fill="x", pady=(0,12))
+        notes_box.insert("1.0", current_notes)
+
+        # Save button
+        def save_notes():
+            new_notes = notes_box.get("1.0", "end-1c")
+            self._update_row(iid, self.tree.set(iid, "attendance"), new_notes, self.tree.set(iid, "timestamp"))
+            self._refresh_stats()
+            modal.destroy()
+
+        save_btn = CTkButton(frame, text="Save", fg_color=("#00639c", "#a9c8e7"), text_color=("#fff", "#232a36"), font=("Arial", 13, "bold"), command=save_notes, width=120, height=38)
+        save_btn.pack(side="right", pady=(8,0))
+
+        # Focus for quick editing
+        notes_box.focus_set()
+
+        # Allow closing with Escape
+        modal.bind("<Escape>", lambda e: modal.destroy())
+
+    def _bind_tree_right_click(self):
+        # Bind right-click to treeview for notes editing
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+
+
+    
 
     def toggle_fullscreen(self, event=None):
         self.attributes("-fullscreen", not self.attributes("-fullscreen"))
@@ -533,6 +603,7 @@ class ScanWindow(CTkToplevel):
         filter_icon = self._load_icon("filter.png", size=(28, 28))
         self.filter_button = CTkButton(search_filter_frame, width=44, height=44, text="", image=filter_icon, fg_color=("#e3eafc", "#232a36"), corner_radius=22, command=self._on_filter_click)
         self.filter_button.pack(side="left", padx=(8, 0))
+            # Removed Reset Sort Button (icon-only, next to filter)
 
         # --- Actions (Far Right) ---
         actions_frame = CTkFrame(top_bar, fg_color="transparent")
@@ -556,9 +627,28 @@ class ScanWindow(CTkToplevel):
         if self.restrictions.get("homework"): cols.append("homework")
         cols += ["attendance", "notes", "timestamp"]
 
+        # Manual column widths
+        column_widths = {
+            "card_id": 90,
+            "student_id": 90,
+            "name": 220,
+            "phone": 130,
+            "exam": 85,
+            "homework": 85,
+            "attendance": 100,
+            "notes": 200,
+            "timestamp": 100,
+        }
+
         self.tree = ttk.Treeview(tree_container, columns=cols, show="headings", selectmode="browse")
         for col in cols:
-            self.tree.heading(col, text=col.replace("_", " ").title()); self.tree.column(col, anchor="center", width=110)
+            width = column_widths.get(col, 110)
+            self.tree.heading(col, text=col.replace("_", " ").title())
+            if col == "notes":
+                # Stretch notes column to fill remaining space and left-align text
+                self.tree.column(col, anchor="w", width=width, stretch=True)
+            else:
+                self.tree.column(col, anchor="center", width=width, stretch=False)
         self.tree.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
@@ -568,6 +658,64 @@ class ScanWindow(CTkToplevel):
         # Bind up/down arrow keys for navigation
         self.tree.bind("<Up>", self._on_tree_up_down)
         self.tree.bind("<Down>", self._on_tree_up_down)
+        # Modern: Bind right-click for notes editing
+        self._bind_tree_right_click()
+
+        # --- Column Sorting ---
+        self._tree_sort_column = None
+        self._tree_sort_reverse = False
+        for col in cols:
+            self.tree.heading(col, command=lambda c=col: self._on_treeview_sort(c))
+
+            # Removed Reset Sort Button (icon-only, next to filter)
+
+    def _on_treeview_sort(self, col):
+        # Get all items and their values for the column
+        items = [(iid, self.tree.set(iid, col)) for iid in self._all_iids if self.tree.exists(iid)]
+        # Determine if numeric sort (for exam/homework)
+        def is_number(val):
+            try:
+                float(val)
+                return True
+            except Exception:
+                return False
+        numeric_cols = {"exam", "homework"}
+        # Use str(v).strip() to avoid attribute error
+        def parse_score(val):
+            val = str(val).strip()
+            if not val:
+                return float('-inf')  # Treat empty as lowest
+            if '/' in val:
+                try:
+                    score, total = val.split('/', 1)
+                    return float(score) / float(total) if float(total) != 0 else float('-inf')
+                except Exception:
+                    return float('-inf')
+            try:
+                return float(val)
+            except Exception:
+                return float('-inf')
+
+        def sort_key(item):
+            val = item[1]
+            if col in {"exam", "homework"}:
+                return parse_score(val)
+            else:
+                return str(val).lower()
+        # Toggle sort order if same column
+        if self._tree_sort_column == col:
+            self._tree_sort_reverse = not self._tree_sort_reverse
+        else:
+            self._tree_sort_column = col
+            self._tree_sort_reverse = False
+        sorted_items = sorted(items, key=sort_key, reverse=self._tree_sort_reverse)
+        # Detach all
+        for iid in self._all_iids:
+            if self.tree.exists(iid):
+                self.tree.detach(iid)
+        # Re-attach in sorted order
+        for iid, _ in sorted_items:
+            self.tree.reattach(iid, '', 'end')
     def _on_tree_enter(self, event):
         # Simulate double-click on selected row when Enter is pressed
         selected = self.tree.selection()
@@ -613,7 +761,7 @@ class ScanWindow(CTkToplevel):
             except Exception: pass
             self.scan_focus_timer = None
 
-    def scan_focus_schedule_clear(self, delay=1500):
+    def scan_focus_schedule_clear(self, delay=100):
         self.scan_focus_cancel_timer()
         self.scan_focus_timer = self.after(delay, self.scan_focus_clear)
 
@@ -796,7 +944,7 @@ class ScanWindow(CTkToplevel):
         if not context.get("iid"): return
         tag = self.scan_now_tag()
         desc = self.scan_describe_tasks(context.get("missing_tasks", [])) or "task"
-        action_note = f"{tag} Attended with override (missing {desc})."
+        action_note = f"{tag} Attended (Didn't do {desc})."
         base = self.scan_append_notes(context.get("existing_notes", ""), action_note)
         typed = self.scan_collect_new_note()
         final_note = self.scan_append_notes(base, typed)
@@ -840,14 +988,14 @@ class ScanWindow(CTkToplevel):
         self.stats_frame.pack(fill="x", padx=24, pady=(0, 8))
 
         card_defs = [
-            {"label": "Total Rows", "var": self.stats_vars["total"], "icon": "group.png", "is_progress": False},
+            {"label": "Total Students", "var": self.stats_vars["total"], "icon": "group.png", "is_progress": False},
             {"label": "Attended", "var": self.stats_vars["attended"], "icon": "check_circle.png", "is_progress": False},
-            {"label": "Attendance %", "var": self.stats_vars["percent"], "icon": "percent.png", "is_progress": True},
+            {"label": "Attendance", "var": self.stats_vars["percent"], "icon": "group.png", "is_progress": True},
         ]
         if self.restrictions.get("exam"):
             card_defs.append({"label": "Missing Exam", "var": self.stats_vars["missing_exam"], "icon": "warning.png", "is_progress": False})
         if self.restrictions.get("homework"):
-            card_defs.append({"label": "Missing H.W.", "var": self.stats_vars["missing_hw"], "icon": "warning.png", "is_progress": False})
+            card_defs.append({"label": "Missing Homework", "var": self.stats_vars["missing_hw"], "icon": "warning.png", "is_progress": False})
 
         # Place all cards in a single horizontal line, centered
         for idx, card in enumerate(card_defs):
