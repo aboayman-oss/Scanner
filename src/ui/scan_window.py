@@ -108,12 +108,19 @@ class ScanWindow(CTkToplevel):
         # --- Icon Cache ---
         self._icon_cache = {}
 
-        # Load background image
-        self.original_bg = Image.open(HOME_BG_FILE)
-        self.bg_photo = ctk.CTkImage(light_image=self.original_bg, dark_image=self.original_bg, size=self.original_bg.size)
-        self.bg_label = CTkLabel(self, text="", image=self.bg_photo)
-        self.bg_label.place(relwidth=1, relheight=1)
-        self.bind("<Configure>", self._on_bg_resize)
+        # --- Filter State ---
+        self._filter_panel = None
+        self._filter_vars = {
+            "attendance": ctk.StringVar(value="all"),
+            "missing_exam": ctk.BooleanVar(value=False),
+            "missing_hw": ctk.BooleanVar(value=False),
+            "has_notes": ctk.BooleanVar(value=False),
+            "manual_added": ctk.BooleanVar(value=False),
+        }
+        self._filter_active = False
+
+        # Remove background image; use solid surface panel for contrast
+        self.bg_label = None  # No background image
 
         self.title("Scan Attendance")
         self.protocol("WM_DELETE_WINDOW", self._on_end_scan)
@@ -150,8 +157,97 @@ class ScanWindow(CTkToplevel):
             self.scan_entry.focus_set()
 
     def _on_filter_click(self):
-        # TODO: Implement dropdown for status filtering (Attended, Absent, Missing Exam, etc.)
-        messagebox.showinfo("Filter", "Advanced filtering will be implemented here.", parent=self)
+        # Toggle filter panel visibility
+        if self._filter_panel and self._filter_panel.winfo_exists():
+            self._hide_filter_panel()
+        else:
+            self._show_filter_panel()
+
+    def _show_filter_panel(self):
+        # Create panel if not exists
+        if self._filter_panel and self._filter_panel.winfo_exists():
+            self._filter_panel.lift()
+            return
+        panel_width = 320  # Set a fixed width for the panel
+        panel = CTkFrame(self, fg_color=("#fff", "#232a36"), corner_radius=12, width=panel_width)
+        self._filter_panel = panel
+        self.update_idletasks()
+        # Center panel horizontally above filter icon
+        bx = self.filter_button.winfo_rootx()
+        by = self.filter_button.winfo_rooty() + self.filter_button.winfo_height()
+        icon_width = self.filter_button.winfo_width()
+        x = bx - self.winfo_rootx() + (icon_width // 2) - (panel_width // 2)
+        y = by - self.winfo_rooty()
+        panel.place(x=x, y=y)
+
+        # Attendance Status (Radio)
+        CTkLabel(panel, text="Attendance Status", font=("Arial", 12, "bold"), anchor="w").pack(anchor="w", padx=12, pady=(10,0))
+        att_frame = CTkFrame(panel, fg_color="transparent")
+        att_frame.pack(anchor="w", padx=12, pady=(0,4))
+        for val, label in [("all", "All Students"), ("attend", "Attended"), ("absent", "Absent")]:
+            ctk.CTkRadioButton(att_frame, text=label, variable=self._filter_vars["attendance"], value=val, command=self._on_filter_change).pack(side="left", padx=(0,12))
+
+        # Task Status (Checkboxes)
+        CTkLabel(panel, text="Task Status", font=("Arial", 12, "bold"), anchor="w").pack(anchor="w", padx=12, pady=(6,0))
+        task_frame = CTkFrame(panel, fg_color="transparent")
+        task_frame.pack(anchor="w", padx=12, pady=(0,4))
+        ctk.CTkCheckBox(task_frame, text="Missing Exam", variable=self._filter_vars["missing_exam"], command=self._on_filter_change).pack(side="left", padx=(0,12))
+        ctk.CTkCheckBox(task_frame, text="Missing H.W.", variable=self._filter_vars["missing_hw"], command=self._on_filter_change).pack(side="left", padx=(0,12))
+
+        # Other Criteria (Checkboxes)
+        CTkLabel(panel, text="Other Criteria", font=("Arial", 12, "bold"), anchor="w").pack(anchor="w", padx=12, pady=(6,0))
+        other_frame = CTkFrame(panel, fg_color="transparent")
+        other_frame.pack(anchor="w", padx=12, pady=(0,4))
+        ctk.CTkCheckBox(other_frame, text="Has Notes", variable=self._filter_vars["has_notes"], command=self._on_filter_change).pack(side="left", padx=(0,12))
+        ctk.CTkCheckBox(other_frame, text="Manually Added (No Card ID)", variable=self._filter_vars["manual_added"], command=self._on_filter_change).pack(side="left", padx=(0,12))
+
+        # Clear Filters Button
+        clear_btn = CTkButton(panel, text="Clear Filters", fg_color=("#e3eafc", "#232a36"), command=self._clear_filters)
+        clear_btn.pack(fill="x", padx=12, pady=(10,10))
+
+        # Dismiss on click-away
+        self.bind_all("<Button-1>", self._on_click_away, add="+")
+        self._filter_panel.lift()
+
+    def _hide_filter_panel(self):
+        if self._filter_panel and self._filter_panel.winfo_exists():
+            self._filter_panel.place_forget()
+            self._filter_panel.destroy()
+        self.unbind_all("<Button-1>")
+
+    def _on_click_away(self, event):
+        # Only close if click is outside panel and filter button
+        widget = event.widget
+        if widget not in {self._filter_panel, self.filter_button}:
+            self._hide_filter_panel()
+
+    def _on_filter_change(self):
+        self._filter_active = self._is_filter_active()
+        self._update_filter_icon()
+        self._filter_all()
+
+    def _clear_filters(self):
+        for v in self._filter_vars.values():
+            if isinstance(v, ctk.StringVar): v.set("all")
+            else: v.set(False)
+        self._filter_active = False
+        self._update_filter_icon()
+        self._filter_all()
+        self._hide_filter_panel()
+
+    def _is_filter_active(self):
+        # Returns True if any filter is not default
+        if self._filter_vars["attendance"].get() != "all": return True
+        if self._filter_vars["missing_exam"].get(): return True
+        if self._filter_vars["missing_hw"].get(): return True
+        if self._filter_vars["has_notes"].get(): return True
+        if self._filter_vars["manual_added"].get(): return True
+        return False
+
+    def _update_filter_icon(self):
+        # Change icon to filled if filter active
+        icon_name = "filter.png" if not self._filter_active else "filter_filled.png"
+        self.filter_button.configure(image=self._load_icon(icon_name, size=(28, 28)))
 
     def toggle_fullscreen(self, event=None):
         self.attributes("-fullscreen", not self.attributes("-fullscreen"))
@@ -371,10 +467,7 @@ class ScanWindow(CTkToplevel):
     # --------------------------------------------------------------------------
 
     def _on_bg_resize(self, event):
-        if event.widget is self:
-            bg = self.original_bg.resize((event.width, event.height), Image.Resampling.LANCZOS)
-            self.bg_photo = ctk.CTkImage(light_image=bg, dark_image=bg, size=(event.width, event.height))
-            self.bg_label.configure(image=self.bg_photo)
+        pass  # No background image to resize
 
     def _focus_scan_entry(self):
         self._focus_reset_job = None
@@ -451,7 +544,7 @@ class ScanWindow(CTkToplevel):
         self._build_stats_strip()
 
         # --- Main content area ---
-        scan_main_content = CTkFrame(self, fg_color="transparent")
+        scan_main_content = CTkFrame(self, fg_color=(LIGHT_SURFACE, DARK_SURFACE), corner_radius=18)
         scan_main_content.pack(fill="both", expand=True, padx=24, pady=(0, 24))
         scan_main_content.grid_rowconfigure(0, weight=1); scan_main_content.grid_columnconfigure(0, weight=1)
 
@@ -472,6 +565,47 @@ class ScanWindow(CTkToplevel):
         scrollbar.grid(row=0, column=1, sticky="ns"); self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.bind("<Double-1>", self.scan_on_row_double_click)
         if self.read_only: self.tree.unbind("<Double-1>")
+        # Bind up/down arrow keys for navigation
+        self.tree.bind("<Up>", self._on_tree_up_down)
+        self.tree.bind("<Down>", self._on_tree_up_down)
+    def _on_tree_enter(self, event):
+        # Simulate double-click on selected row when Enter is pressed
+        selected = self.tree.selection()
+        if selected:
+            # Create a dummy event with y set to 0 (not used)
+            class DummyEvent:
+                def __init__(self, y):
+                    self.y = y
+            self.scan_on_row_double_click(DummyEvent(0))
+
+        # Bind up/down arrow keys for navigation
+        self.tree.bind("<Up>", self._on_tree_up_down)
+        self.tree.bind("<Down>", self._on_tree_up_down)
+    def _on_tree_up_down(self, event):
+        # Move selection up or down in the Treeview
+        selected = self.tree.selection()
+        if not selected:
+            # If nothing is selected, select the first item
+            first = self.tree.get_children()
+            if first:
+                self.tree.selection_set(first[0])
+                self.tree.focus(first[0])
+            return
+        current = selected[0]
+        items = list(self.tree.get_children())
+        if current not in items:
+            return
+        idx = items.index(current)
+        if event.keysym == "Up" and idx > 0:
+            new_idx = idx - 1
+        elif event.keysym == "Down" and idx < len(items) - 1:
+            new_idx = idx + 1
+        else:
+            return
+        new_item = items[new_idx]
+        self.tree.selection_set(new_item)
+        self.tree.focus(new_item)
+        self.tree.see(new_item)
 
     def scan_focus_cancel_timer(self):
         if self.scan_focus_timer is not None:
@@ -701,10 +835,10 @@ class ScanWindow(CTkToplevel):
             self.scan_focus_clear()
 
     def _build_stats_strip(self):
-        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=16)
-        self.stats_frame.pack(fill="x", padx=24, pady=(0, 18))
+        # Compact horizontal stats bar
+        self.stats_frame = CTkFrame(self, fg_color=("#f1f5f9", "#12263a"), corner_radius=12, height=56)
+        self.stats_frame.pack(fill="x", padx=24, pady=(0, 8))
 
-        # Card definitions: label, var, icon, is_progress
         card_defs = [
             {"label": "Total Rows", "var": self.stats_vars["total"], "icon": "group.png", "is_progress": False},
             {"label": "Attended", "var": self.stats_vars["attended"], "icon": "check_circle.png", "is_progress": False},
@@ -715,41 +849,42 @@ class ScanWindow(CTkToplevel):
         if self.restrictions.get("homework"):
             card_defs.append({"label": "Missing H.W.", "var": self.stats_vars["missing_hw"], "icon": "warning.png", "is_progress": False})
 
+        # Place all cards in a single horizontal line, centered
         for idx, card in enumerate(card_defs):
             card_frame = CTkFrame(
                 self.stats_frame,
                 fg_color=("#ffffff", "#232a36"),
-                corner_radius=14,
-                width=140,
-                height=90
+                corner_radius=10,
+                width=110,
+                height=56
             )
-            card_frame.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 16, 0), pady=8)
+            card_frame.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 10, 0), pady=4)
             self.stats_frame.grid_columnconfigure(idx, weight=1)
 
-            # Icon
-            icon_img = self._load_icon(card["icon"], size=(32, 32))
-            icon_label = CTkLabel(card_frame, image=icon_img, text="", width=36)
-            icon_label.pack(side="top", anchor="center", pady=(10, 0))
+            # Center everything in the card
+            card_inner = CTkFrame(card_frame, fg_color="transparent")
+            card_inner.pack(expand=True, fill="both")
 
-            # Number or Progress
+            CTkLabel(card_inner, text=card["label"], font=("Arial", 12, "bold"), text_color=("#43474e", "#cac4d0"), anchor="center", justify="center").pack(side="top", anchor="center", pady=(6, 0))
+
+            icon_num_frame = CTkFrame(card_inner, fg_color="transparent")
+            icon_num_frame.pack(side="top", anchor="center", pady=(0, 0), expand=True)
+            icon_img = self._load_icon(card["icon"], size=(22, 22))
+            icon_label = CTkLabel(icon_num_frame, image=icon_img, text="", width=24)
+            icon_label.pack(side="left", anchor="center", padx=(0, 4))
+
             if card["is_progress"]:
-                # Attendance % as circular progress bar
                 percent_str = self.stats_vars["percent"].get().replace("%", "")
                 try:
                     percent_val = float(percent_str) / 100.0
                 except Exception:
                     percent_val = 0.0
-                progress_frame = CTkFrame(card_frame, fg_color="transparent")
-                progress_frame.pack(side="top", anchor="center", pady=(2, 0))
-                progress = CTkProgressBar(progress_frame, width=48, height=8)
+                progress = CTkProgressBar(icon_num_frame, width=40, height=6)
                 progress.set(percent_val)
-                progress.pack(side="top", anchor="center")
-                CTkLabel(card_frame, textvariable=self.stats_vars["percent"], font=("Arial", 18, "bold"), text_color=("#00639c", "#a9c8e7")).pack(side="top", anchor="center", pady=(2, 0))
+                progress.pack(side="left", anchor="center", padx=(0, 4))
+                CTkLabel(icon_num_frame, textvariable=self.stats_vars["percent"], font=("Arial", 18, "bold"), text_color=("#00639c", "#a9c8e7"), anchor="center", justify="center").pack(side="left", anchor="center", padx=(0, 0))
             else:
-                CTkLabel(card_frame, textvariable=card["var"], font=("Arial", 22, "bold"), text_color=("#1b1c1e", "#e3e2e6")).pack(side="top", anchor="center", pady=(2, 0))
-
-            # Label
-            CTkLabel(card_frame, text=card["label"], font=("Arial", 11), text_color=("#43474e", "#cac4d0")).pack(side="top", anchor="center", pady=(2, 8))
+                CTkLabel(icon_num_frame, textvariable=card["var"], font=("Arial", 20, "bold"), text_color=("#1b1c1e", "#e3e2e6"), anchor="center", justify="center").pack(side="left", anchor="center", padx=(0, 0))
 
     def _apply_treeview_style(self):
         mode = ctk.get_appearance_mode()
@@ -836,15 +971,41 @@ class ScanWindow(CTkToplevel):
     def _filter_all(self):
         query = self._clean_value(self.search_var.get()).lower() if self.search_var else ""
         terms = [term for term in query.split() if term]
+        att = self._filter_vars["attendance"].get()
+        missing_exam = self._filter_vars["missing_exam"].get()
+        missing_hw = self._filter_vars["missing_hw"].get()
+        has_notes = self._filter_vars["has_notes"].get()
+        manual_added = self._filter_vars["manual_added"].get()
+
         for iid in self._all_iids:
             if not self.tree.exists(iid): continue
-            if not terms:
+            show = True
+            # Search filter
+            if terms:
+                values = [self._clean_value(self.tree.set(iid, col)).lower() for col in self.tree['columns']] + [str(iid).lower()]
+                haystack = ' '.join(values)
+                if not all(term in haystack for term in terms):
+                    show = False
+            # Attendance filter
+            if att == "attend" and self.scan_tree_get(iid, "attendance").lower() != "attend":
+                show = False
+            if att == "absent" and self.scan_tree_get(iid, "attendance").lower() == "attend":
+                show = False
+            # Task filters
+            if missing_exam and not self.scan_collect_missing_tasks(iid).count("exam"):
+                show = False
+            if missing_hw and not self.scan_collect_missing_tasks(iid).count("homework"):
+                show = False
+            # Has notes
+            if has_notes and not self.scan_tree_get(iid, "notes"):
+                show = False
+            # Manually added (no card id is not digit)
+            if manual_added and str(iid).isdigit():
+                show = False
+            if show:
                 self.tree.reattach(iid, '', 'end')
-                continue
-            values = [self._clean_value(self.tree.set(iid, col)).lower() for col in self.tree['columns']] + [str(iid).lower()]
-            haystack = ' '.join(values)
-            if all(term in haystack for term in terms): self.tree.reattach(iid, '', 'end')
-            else: self.tree.detach(iid)
+            else:
+                self.tree.detach(iid)
 
     def _set_attendance(self, code, attendance, notes, *, warn_on_duplicate=True, timestamp_override=None):
         if self.read_only or not self.tree.exists(code): return False
