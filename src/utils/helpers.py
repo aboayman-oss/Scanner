@@ -46,6 +46,11 @@ else:
     BASE_FOLDER = os.path.dirname(ASSETS_DIR)
 
 LOGO_FILE        = os.path.join(ASSETS_DIR, 'logo.png')
+PAST_SESSIONS_ICON_FILE = os.path.join(ASSETS_DIR, 'past sessions.png')
+SETTINGS_ICON_FILE = os.path.join(ASSETS_DIR, 'settings.png')
+IMPORT_ICON_FILE = os.path.join(ASSETS_DIR, 'import.png')
+NEW_SESSION_ICON_FILE = os.path.join(ASSETS_DIR, 'add.png')
+DASHBOARD_ICON_FILE = os.path.join(ASSETS_DIR, 'dashboard.png')
 HOME_BG_FILE     = os.path.join(ASSETS_DIR, 'background.jpg')
 SETTINGS_BG_FILE = os.path.join(ASSETS_DIR, 'backgroundnew.jpg')
 
