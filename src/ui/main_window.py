@@ -13,6 +13,7 @@ from PIL import Image
 from core.session_manager import SessionManager
 from ui.dialogs.session_setup_dialog import SessionSetupDialog
 from ui.dialogs.session_summary_dialog import SessionSummaryDialog
+from ui.dialogs.password_dialog import PasswordDialog
 
 from ui.scan_window import ScanWindow
 from ui.settings_window import SettingsWindow
@@ -40,6 +41,11 @@ from utils.helpers import (
 class App(CTk):
     def __init__(self):
         super().__init__()
+
+        # --- FORCE DARK THEME ---
+        ctk.set_appearance_mode("dark")
+        # ------------------------
+
         self.title("RFID Attendance Manager")
         self.column_map = {}
         self.data_df    = None
@@ -263,7 +269,7 @@ class App(CTk):
                 btn_frame, 
                 text="Open", 
                 width=60,
-                command=lambda p=path_entry: self._open_session_path(p, read_only=True)
+                command=lambda p=path_entry: self._open_session_path(p, read_only=False)
             )
             open_btn.pack(side="right")
 
@@ -413,8 +419,7 @@ class App(CTk):
 
         ctk.CTkButton(action_buttons_frame, text="Refresh", command=self._populate_past_sessions_list).pack(side="left", padx=(0, 10))
 
-        self.clear_all_btn = ctk.CTkButton(action_buttons_frame, text="Clear All", command=self._clear_all_sessions)
-        self.clear_all_btn.pack(side="left")
+    # Removed Clear All button
 
         # Scrollable frame for the list
         self.sessions_list_frame = ctk.CTkScrollableFrame(self.content_frame, label_text="Session Files")
@@ -440,7 +445,7 @@ class App(CTk):
                     files.append((path_entry, stats.st_mtime, stats.st_size))
             files.sort(key=lambda item: item[1], reverse=True)
 
-        self.clear_all_btn.configure(state="normal" if files else "disabled")
+    # Removed Clear All button state configuration
 
         if not files:
             ctk.CTkLabel(self.sessions_list_frame, text="No session files found.").pack(pady=20)
@@ -478,12 +483,18 @@ class App(CTk):
         self.set_status("Ready.")
 
     def open_settings(self):
-        if self.settings_window is not None and self.settings_window.winfo_exists():
+        dialog = PasswordDialog(self)
+        password = dialog.get_input()
+
+        if password == "gawish1":
+            if self.settings_window is not None and self.settings_window.winfo_exists():
+                bring_window_to_front(self.settings_window)
+                return
+            self.settings_window = SettingsWindow(self)
             bring_window_to_front(self.settings_window)
-            return
-        self.settings_window = SettingsWindow(self)
-        bring_window_to_front(self.settings_window)
-        self.settings_window.protocol("WM_DELETE_WINDOW", self._on_settings_close)
+            self.settings_window.protocol("WM_DELETE_WINDOW", self._on_settings_close)
+        elif password is not None:
+            messagebox.showerror("Incorrect Password", "The password you entered is incorrect.")
 
     def _on_settings_close(self):
         if self.settings_window is not None:

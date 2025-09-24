@@ -23,7 +23,7 @@ class SessionSummaryDialog(CTkToplevel):
         self.grab_set()
         self.after(40, lambda: bring_window_to_front(self))
 
-        container = CTkFrame(self, corner_radius=16, fg_color=("#f4f6fb", "#1a1d23"))
+        container = CTkFrame(self, corner_radius=16, fg_color="#1a1d23")
         container.pack(fill="both", expand=True, padx=24, pady=24)
         container.grid_columnconfigure(0, weight=1)
 

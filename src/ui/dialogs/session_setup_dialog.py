@@ -59,7 +59,7 @@ class SessionSetupDialog(CTkToplevel):
         CTkLabel(
             self,
             textvariable=self.error_var,
-            text_color=("#ff6b6b", "#b00020"),
+            text_color="#b00020",
             justify="left",
             anchor="w",
             wraplength=320

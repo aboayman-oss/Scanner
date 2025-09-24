@@ -20,7 +20,7 @@ class AddStudentDialog(CTkToplevel):
         self.grab_set()
         self.after(40, self._activate_modal)
 
-        container = CTkFrame(self, corner_radius=16, fg_color=("#f4f6fb", "#1a1d23"))
+        container = CTkFrame(self, corner_radius=16, fg_color="#1a1d23")
         container.pack(fill="both", expand=True, padx=24, pady=24)
         container.grid_columnconfigure(0, weight=1)
 
@@ -76,9 +76,9 @@ class AddStudentDialog(CTkToplevel):
             actions,
             text="Cancel",
             command=self._on_cancel,
-            fg_color=("#e5e7eb", "#2d2f36"),
-            hover_color=("#d1d5db", "#363a45"),
-            text_color=("#0f172a", "#f8fafc")
+            fg_color="#2d2f36",
+            hover_color="#363a45",
+            text_color="#f8fafc"
         )
         self.cancel_button.grid(row=0, column=0, padx=(0, 12), sticky="ew")
 

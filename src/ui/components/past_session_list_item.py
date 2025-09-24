@@ -45,7 +45,7 @@ class PastSessionListItem(ctk.CTkFrame):
             btn_frame,
             text="Open",
             width=80,
-            command=lambda: open_func(self.path, read_only=True)
+            command=lambda: open_func(self.path, read_only=False)
         )
         open_btn.pack(side="left")
 
