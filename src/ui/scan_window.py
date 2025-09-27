@@ -125,7 +125,7 @@ class ScanWindow(CTkToplevel):
         self.state('zoomed')
         self.bind("<F11>", self.toggle_fullscreen)
         self.bind("<Escape>", self.toggle_fullscreen)
-        self.bind("<s>", self._on_s_key_press)
+        self.bind("<Control-s>", self._on_s_key_press)
         self.restrictions = self.sm.restrictions
         self.df = read_data(self.sm.session_path).fillna("")
         self.mapping = self.sm.mapping or {col: col for col in self.df.columns}
@@ -335,7 +335,7 @@ class ScanWindow(CTkToplevel):
         self.attributes("-fullscreen", not self.attributes("-fullscreen"))
 
     def _on_s_key_press(self, event):
-        """Handler for 's' key press to focus the scan entry."""
+        """Handler for Ctrl+S key press to focus the scan entry."""
         # Check if focus is already in a text entry field to avoid interruption
         focused_widget = self.focus_get()
         if isinstance(focused_widget, (CTkEntry, CTkTextbox)):
@@ -580,7 +580,7 @@ class ScanWindow(CTkToplevel):
         scan_entry_frame.grid(row=0, column=0, sticky="w", padx=(0, 12))
         scan_icon_label = CTkLabel(scan_entry_frame, image=scan_icon, text="", width=32)
         scan_icon_label.pack(side="left", padx=(0, 8))
-        self.scan_entry = CTkEntry(scan_entry_frame, width=260, height=44, placeholder_text="Scan card ID (place card here)")
+        self.scan_entry = CTkEntry(scan_entry_frame, width=260, height=44, placeholder_text="Scan card ID (press Ctrl+S)", font=("Roboto", 14))
         self.scan_entry.pack(side="left", padx=(0, 0), pady=0)
         self.scan_entry.bind("<Return>", lambda _e: self.scan_on_scan())
         self.pb = CTkProgressBar(scan_entry_frame, mode="indeterminate", width=260)
@@ -872,14 +872,39 @@ class ScanWindow(CTkToplevel):
     def scan_collect_new_note(self):
         if not hasattr(self, "focus_view"): return ""
         try:
-            typed = self.focus_view.notes.get("1.0", "end-1c").strip()
+            raw_text = self.focus_view.notes.get("1.0", "end-1c")
         except Exception:
             return ""
-        if typed == "Add notes here...": return ""
-        return self._clean_value(typed)
+        if raw_text is None:
+            return ""
+        raw_text = raw_text.replace("\r\n", "\n")
+        candidate = self._clean_value(raw_text)
+        if not candidate or candidate == "Add notes here...":
+            return ""
+        original_clean = ""
+        ctx = getattr(self, "scan_focus_ctx", None)
+        if ctx:
+            original_raw = (ctx.get("original_notes") or "").replace("\r\n", "\n")
+            original_clean = self._clean_value(original_raw)
+        if original_clean:
+            if candidate == original_clean:
+                return ""
+            if candidate.startswith(original_clean):
+                remainder = candidate[len(original_clean):].lstrip()
+                return self._clean_value(remainder)
+        return candidate
+
+    def _current_datetime(self):
+        return datetime.now()
+
+    def _format_column_timestamp(self, dt):
+        return dt.strftime("%I:%M:%S %p")
+
+    def _format_note_tag(self, dt):
+        return f"[{dt.strftime('%I:%M:%S %p')}]"
 
     def scan_now_tag(self):
-        return f"[{datetime.now():%H:%M:%S}]"
+        return self._format_note_tag(self._current_datetime())
 
     def scan_determine_status(self, scan_ctx):
         if scan_ctx.get("status") in {"not_found", "duplicate"}: return scan_ctx["status"]
@@ -1012,7 +1037,11 @@ class ScanWindow(CTkToplevel):
         context = self.scan_focus_ctx or {}
         card_id = context.get("card_id") or context.get("card_display")
         typed = self.scan_collect_new_note()
-        self._launch_add_student_dialog(card_id=card_id, default_notes=typed)
+        default_notes = typed
+        if not context.get("found", True) or context.get("status") == "not_found":
+            diff_note = "(From diff Group)"
+            default_notes = f"{diff_note} {default_notes}".strip() if default_notes else diff_note
+        self._launch_add_student_dialog(card_id=card_id, default_notes=default_notes or "")
 
     def scan_focus_on_cancel_attendance(self):
         context = self.scan_focus_ctx or {}
@@ -1210,18 +1239,18 @@ class ScanWindow(CTkToplevel):
     def _set_attendance(self, code, attendance, notes, *, warn_on_duplicate=True, timestamp_override=None):
         if self.read_only or not self.tree.exists(code): return False
         target_attendance = self._clean_value(attendance)
-        # The check for duplicate attendance is now handled in scan_on_open_row
-        # if warn_on_duplicate and target_attendance.lower() == "attend" and self.scan_tree_get(code, "attendance").lower() == "attend":
-        #     messagebox.showwarning("Already Attended", "This student is already attended.", parent=self)
-        #     return False
-        
-        timestamp = timestamp_override or datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-        rec = self._build_record_payload(code, target_attendance, self._clean_value(notes), timestamp)
-        
-        try: self.sm.add_record(rec)
-        except Exception as exc: messagebox.showwarning("Attendance Update Failed", str(exc), parent=self); return False # type: ignore
-
-        self._update_row(code, target_attendance, notes, timestamp)
+        existing_timestamp = self.scan_tree_get(code, "timestamp")
+        current_dt = self._current_datetime()
+        is_first_attend = target_attendance.lower() == "attend" and not existing_timestamp
+        column_timestamp = self._format_column_timestamp(current_dt) if is_first_attend else existing_timestamp
+        notes_clean = self._clean_value(notes)
+        record_timestamp = self._clean_value(column_timestamp) if column_timestamp else ""
+        rec = self._build_record_payload(code, target_attendance, notes_clean, record_timestamp)
+        try:
+            self.sm.add_record(rec)
+        except Exception as exc:
+            messagebox.showwarning("Attendance Update Failed", str(exc), parent=self); return False # type: ignore
+        self._update_row(code, target_attendance, notes, column_timestamp if is_first_attend else None)
         self._refresh_stats()
         return True
 
@@ -1240,7 +1269,7 @@ class ScanWindow(CTkToplevel):
 
     def _on_add_student_flow(self): self._launch_add_student_dialog()
 
-    def _launch_add_student_dialog(self, card_id=None, default_notes="manual addition"):
+    def _launch_add_student_dialog(self, card_id=None, default_notes="Manually added"):
         if self.read_only: return
         self._pause_focus_guard()
         normalized_card = None
@@ -1255,8 +1284,12 @@ class ScanWindow(CTkToplevel):
         cid = str(card_id).strip() if card_id else self._next_unknown_card_id()
         if cid.isdigit(): cid = cid.zfill(8)
         
-        timestamp = self.scan_now_tag()
-        rec = {"card_id": cid, "attendance": "attend", "timestamp": timestamp, **values, "notes": default_notes}
+        current_dt = self._current_datetime()
+        column_timestamp = self._format_column_timestamp(current_dt)
+        note_tag = self._format_note_tag(current_dt)
+        default_notes_clean = self._clean_value(default_notes)
+        note_text = f"{note_tag} {default_notes_clean}".strip() if default_notes_clean else note_tag
+        rec = {"card_id": cid, "attendance": "attend", "timestamp": column_timestamp, **values, "notes": note_text}
         for task in ["exam", "homework"]:
             if self.restrictions.get(task): rec.setdefault(task, "")
         
@@ -1317,3 +1350,5 @@ class ScanWindow(CTkToplevel):
         id_exists = student_id in df[sid_col].astype(str).values if sid_col in df.columns else False
         phone_exists = phone in df[phone_col].astype(str).values if phone_col in df.columns else False
         return id_exists, phone_exists
+
+

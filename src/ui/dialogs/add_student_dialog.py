@@ -5,13 +5,13 @@ from customtkinter import CTkButton, CTkEntry, CTkFrame, CTkLabel, CTkToplevel
 from utils.helpers import MIN_SUMMARY_SIZE, bring_window_to_front, ensure_initial_size
 
 class AddStudentDialog(CTkToplevel):
-    def __init__(self, parent, *, card_id=None, on_submit=None, duplicate_checker=None, default_notes="manual addition"):
+    def __init__(self, parent, *, card_id=None, on_submit=None, duplicate_checker=None, default_notes="Manually added"):
         super().__init__(parent)
         self.parent = parent
         self.card_id = card_id.zfill(8) if card_id and card_id.isdigit() else card_id
         self._on_submit = on_submit
         self._duplicate_checker = duplicate_checker
-        self._default_notes = default_notes or "manual addition"
+        self._default_notes = default_notes or "Manually added"
         self._focus_guard_restored = False
 
         self.title("Add Student")
