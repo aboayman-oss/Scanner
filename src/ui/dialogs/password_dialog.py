@@ -1,9 +1,12 @@
-'''A simple password dialog.'''
+﻿'''A simple password dialog.'''
 import customtkinter as ctk
+
+from utils.helpers import set_dark_title_bar
 
 class PasswordDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        set_dark_title_bar(self)
         self.title("Password Required")
         self.transient(parent)
         self.grab_set()
@@ -25,8 +28,12 @@ class PasswordDialog(ctk.CTkToplevel):
         self.cancel_button = ctk.CTkButton(self.button_frame, text="Cancel", command=self._on_cancel)
         self.cancel_button.pack(side="right", padx=10)
 
-        self.password_entry.focus_set()
+        self.after(10, self._focus_password_entry)
         self.wait_window(self)
+
+    def _focus_password_entry(self):
+        self.password_entry.focus_set()
+        self.password_entry.focus_force()
 
     def _on_ok(self, event=None):
         self.result = self.password_entry.get()
@@ -38,3 +45,5 @@ class PasswordDialog(ctk.CTkToplevel):
 
     def get_input(self):
         return self.result
+
+

@@ -3,20 +3,43 @@ import os
 
 import pandas as pd
 
-from utils.helpers import SETTINGS, SESSIONS_FOLDER, read_data, write_data
+from utils.helpers import SETTINGS, get_sessions_folder, read_data, write_data, resolve_session_file_path
 
 class SessionManager:
-    def __init__(self, name, params, column_map, data_df):
-        self.params       = params
+    def __init__(self, name, params, column_map, data_df, session_path=None):
+        self.params       = params or {}
         self.name         = name
         self.mapping      = column_map
         self.data_df      = data_df
         self.records      = []
         self.restrictions = SETTINGS["restrictions"]
-        # Use the correct extension based on SETTINGS
         file_type = SETTINGS.get("file_type", "csv")
         ext = "xlsx" if file_type == "xlsx" else "csv"
-        self.session_path = os.path.join(SESSIONS_FOLDER, f"{name}.{ext}")
+
+        stage = self.params.get("stage")
+        center = self.params.get("center")
+
+        if session_path:
+            computed_path = os.path.abspath(session_path)
+        else:
+            computed_path = resolve_session_file_path(
+                name,
+                stage=stage,
+                center=center,
+                ext=ext,
+                create=True,
+            )
+            computed_path = os.path.abspath(computed_path)
+            if not os.path.exists(computed_path):
+                legacy_path = os.path.join(get_sessions_folder(), f"{name}.{ext}")
+                if os.path.exists(legacy_path):
+                    computed_path = os.path.abspath(legacy_path)
+
+        self.session_path = computed_path
+        directory = os.path.dirname(self.session_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
         if os.path.exists(self.session_path):
             df = read_data(self.session_path)
             # Only keep mapped columns
@@ -32,6 +55,7 @@ class SessionManager:
                     col = self.mapping.get(k, k)
                     rec[k] = row.get(col, "")
                 self.records.append(rec)
+
 
     def add_record(self, rec):
         df = read_data(self.session_path)

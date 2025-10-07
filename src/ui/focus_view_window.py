@@ -8,16 +8,19 @@ from customtkinter import CTkFrame, CTkLabel, CTkTextbox, CTkButton, CTkToplevel
 
 class FocusViewWindow:
     def __init__(self, parent, read_only=False, icon_cache=None,
-                 on_complete=None, on_add_student=None, on_override=None, on_deny=None, on_cancel=None, on_dismiss=None):
+                 on_complete=None, on_add_student=None, on_override=None, on_save_notes=None,
+                 on_deny=None, on_cancel=None, on_dismiss=None):
         self.parent = parent
         self.read_only = read_only
         self._icon_cache = icon_cache if icon_cache is not None else {}
         self._on_complete = on_complete
         self._on_add_student = on_add_student
         self._on_override = on_override
+        self._on_save_notes = on_save_notes
         self._on_deny = on_deny
         self._on_cancel = on_cancel
         self._on_dismiss = on_dismiss
+        self._feedback_job = None # To manage the feedback timer
         self._setup_ui()
 
     def _load_icon(self, name, size=(24, 24)):
@@ -76,14 +79,49 @@ class FocusViewWindow:
         self.exam_grade_label = CTkLabel(self.exam_card, text="", font=("Roboto", 14))
         self.exam_grade_label.grid(row=0, column=2, sticky="e", padx=12)
 
-        self.notes = CTkTextbox(details_zone, corner_radius=12, border_width=0, font=("Roboto", 22, "bold"), text_color="#FFFFFF")
-        self.notes.pack(fill="both", expand=True, pady=(12, 0))
+        # --- START: NOTES CONTAINER WITH HEADER BAR ---
+        notes_container = CTkFrame(details_zone, fg_color="transparent")
+        notes_container.pack(fill="both", expand=True, pady=(12, 0))
+        notes_container.grid_rowconfigure(1, weight=1)
+        notes_container.grid_columnconfigure(0, weight=1)
+
+        # Create a header bar for the notes section
+        notes_header = CTkFrame(notes_container, fg_color="#2b2b2b", corner_radius=12)
+        notes_header.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        notes_header.grid_columnconfigure(0, weight=1)
+
+        CTkLabel(notes_header, text="Notes", font=("Roboto", 14, "bold"), anchor="w").grid(row=0, column=0, sticky="w", padx=12, pady=8)
+
+        save_icon = self._load_icon("save.png", size=(20, 20))
+        self.btn_save_notes = CTkButton(
+            notes_header,
+            text="Save",
+            image=save_icon,
+            command=self._on_save_notes,
+            compound="left",
+            height=32
+        )
+        self.btn_save_notes.grid(row=0, column=1, sticky="e", padx=8, pady=8)
+
+        self.notes = CTkTextbox(
+            notes_container, corner_radius=12, border_width=0, font=("Noto Sans Arabic", 16),
+            text_color="#FFFFFF", wrap="word"
+        )
+        self.notes._textbox.tag_configure("rtl", justify="right")
+        self.notes.grid(row=1, column=0, sticky="nsew")
         self.notes.insert("1.0", "Add notes here...")
+        # --- END: NOTES CONTAINER WITH HEADER BAR ---
+
         self.notes.bind("<FocusIn>", self._on_notes_focus_in)
         self.notes.bind("<FocusOut>", self._on_notes_focus_out)
 
         actions_zone = CTkFrame(parent, fg_color="transparent")
         actions_zone.pack(fill="x", padx=20, pady=(12, 20))
+
+        # --- START: ADD SAVE FEEDBACK LABEL ---
+        self.save_feedback_label = CTkLabel(actions_zone, text="", font=("Roboto", 12))
+        self.save_feedback_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        # --- END: ADD SAVE FEEDBACK LABEL ---
 
         self.btn_complete = CTkButton(actions_zone, text="Complete & Attend", image=self._load_icon("task_alt.png"), command=self._on_complete)
         self.btn_add_student = CTkButton(actions_zone, text="Add New Student", image=self._load_icon("person_add.png"), command=self._on_add_student)
@@ -119,6 +157,25 @@ class FocusViewWindow:
             self.notes.configure(text_color="#FFFFFF")
 
     def _on_notes_focus_out(self, event):
+        # First, trigger the save action if the callback exists
+        if self._on_save_notes:
+            self._on_save_notes()
+        # Then, handle the placeholder text logic
         if not self.notes.get("1.0", "end-1c"):
+            self.notes._textbox.tag_remove("rtl", "1.0", "end")
             self.notes.configure(text_color="gray")
             self.notes.insert("1.0", "Add notes here...")
+
+    def show_save_feedback(self):
+        # --- START: NEW METHOD ---
+        """Displays a temporary 'Notes Saved' message."""
+        if self._feedback_job:
+            self.parent.after_cancel(self._feedback_job)
+
+        self.save_feedback_label.configure(text="✓ Notes Saved")
+        self._feedback_job = self.parent.after(2500, self._hide_save_feedback)
+
+    def _hide_save_feedback(self):
+        self.save_feedback_label.configure(text="")
+        self._feedback_job = None
+        # --- END: NEW METHOD ---

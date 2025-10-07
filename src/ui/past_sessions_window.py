@@ -5,11 +5,12 @@ from tkinter import messagebox, ttk
 
 from customtkinter import CTkButton, CTkFrame, CTkLabel, CTkToplevel
 
-from utils.helpers import MIN_PAST_SESSIONS_SIZE, SESSIONS_FOLDER, bring_window_to_front, ensure_initial_size
+from utils.helpers import MIN_PAST_SESSIONS_SIZE, bring_window_to_front, ensure_initial_size, get_sessions_folder, set_dark_title_bar
 
 class PastSessionsWindow(CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        set_dark_title_bar(self)
         self.parent = parent
         self.title("Past Sessions")
         self.minsize(*MIN_PAST_SESSIONS_SIZE)
@@ -19,7 +20,7 @@ class PastSessionsWindow(CTkToplevel):
         header = CTkLabel(
             self,
             text="Past Sessions",
-            font=("Arial", 20, "bold")
+            font=("Roboto", 20, "bold")
         )
         header.pack(anchor="w", padx=24, pady=(24, 12))
 
@@ -45,7 +46,7 @@ class PastSessionsWindow(CTkToplevel):
         self.empty_label = CTkLabel(
             container,
             text="No session files found.",
-            font=("Arial", 14)
+            font=("Roboto", 14)
         )
         self.empty_label.place_forget()
 
@@ -93,17 +94,26 @@ class PastSessionsWindow(CTkToplevel):
         for item in self.tree.get_children():
             self.tree.delete(item)
         self._paths.clear()
-        if not os.path.isdir(SESSIONS_FOLDER):
+        sessions_dir = get_sessions_folder()
+        if not os.path.isdir(sessions_dir):
             self._toggle_empty_state(True)
             self._on_select()
             self._update_clear_state()
             return
         files = []
-        for entry in os.listdir(SESSIONS_FOLDER):
-            path_entry = os.path.join(SESSIONS_FOLDER, entry)
-            if os.path.isfile(path_entry) and entry.lower().endswith((".csv", ".xlsx")):
-                stats = os.stat(path_entry)
-                files.append((path_entry, stats.st_mtime, stats.st_size))
+        try:
+            for root, _dirs, filenames in os.walk(sessions_dir):
+                for filename in filenames:
+                    if not filename.lower().endswith((".csv", ".xlsx")):
+                        continue
+                    path_entry = os.path.join(root, filename)
+                    try:
+                        stats = os.stat(path_entry)
+                    except OSError:
+                        continue
+                    files.append((path_entry, stats.st_mtime, stats.st_size))
+        except OSError:
+            files = []
         files.sort(key=lambda item: item[1], reverse=True)
         for index, (path_entry, modified, size) in enumerate(files):
             name = os.path.splitext(os.path.basename(path_entry))[0]
@@ -175,6 +185,16 @@ class PastSessionsWindow(CTkToplevel):
                 os.remove(path_entry)
             except Exception as exc:
                 failures.append(f"{os.path.basename(path_entry)}: {exc}")
+
+        sessions_dir = get_sessions_folder()
+        for root, _dirs, _files in os.walk(sessions_dir, topdown=False):
+            if root == sessions_dir:
+                continue
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass
+
         self.refresh()
         if hasattr(self.parent, "_refresh_recent_sessions"):
             try:
